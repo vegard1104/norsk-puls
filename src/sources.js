@@ -4,12 +4,9 @@
 
 export const DEFAULT_SOURCES = [
   { id: 'nrk', name: 'NRK', rssUrl: 'https://www.nrk.no/toppsaker.rss', color: '#d4202a', enabled: true, isInternational: false },
-  { id: 'vg', name: 'VG', rssUrl: 'https://www.vg.no/rss/feed/?categories=1068&limit=20', color: '#e8001c', enabled: true, isInternational: false },
-  { id: 'dagbladet', name: 'Dagbladet', rssUrl: 'https://www.dagbladet.no/xml/rss2.xml', color: '#e63329', enabled: true, isInternational: false },
+  { id: 'vg', name: 'VG', rssUrl: 'https://www.vg.no/rss/feed/?limit=20', color: '#e8001c', enabled: true, isInternational: false },
   { id: 'aftenposten', name: 'Aftenposten', rssUrl: 'https://www.aftenposten.no/rss', color: '#004b87', enabled: true, isInternational: false },
-  { id: 'tv2', name: 'TV 2', rssUrl: 'https://www.tv2.no/rss', color: '#ff6600', enabled: true, isInternational: false },
   { id: 'e24', name: 'E24', rssUrl: 'https://e24.no/rss', color: '#0066cc', enabled: true, isInternational: false },
-  { id: 'dn', name: 'DN', rssUrl: 'https://www.dn.no/rssFeeder/rss2.xml', color: '#8B1A1A', enabled: true, isInternational: false },
 ];
 
 export const INTERNATIONAL_SOURCES = [
@@ -17,8 +14,6 @@ export const INTERNATIONAL_SOURCES = [
   { id: 'guardian', name: 'The Guardian', rssUrl: 'https://www.theguardian.com/world/rss', color: '#005689', enabled: true, isInternational: true },
   { id: 'aljazeera', name: 'Al Jazeera', rssUrl: 'https://www.aljazeera.com/xml/rss/all.xml', color: '#c8a951', enabled: true, isInternational: true },
   { id: 'france24', name: 'France 24', rssUrl: 'https://www.france24.com/en/rss', color: '#e8002d', enabled: true, isInternational: true },
-  { id: 'apnews', name: 'AP News', rssUrl: 'https://feeds.apnews.com/apnews/topnews', color: '#cc0000', enabled: true, isInternational: true },
-  { id: 'dw', name: 'DW News', rssUrl: 'https://rss.dw.com/rdf/rss-en-world', color: '#006baf', enabled: true, isInternational: true },
 ];
 
 export const CATEGORIES = [

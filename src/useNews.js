@@ -3,18 +3,25 @@ import { CATEGORIES, WORLD_REGIONS } from './sources.js';
 
 const PROXY_URL = import.meta.env.VITE_PROXY_URL;
 
-const UNSPLASH_IMAGES = {
-  innenriks: ['https://images.unsplash.com/photo-1529260830199-42c24126f198?w=800', 'https://images.unsplash.com/photo-1568605114967-8130f3a36994?w=800'],
-  utenriks: ['https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800', 'https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1?w=800'],
-  sport: ['https://images.unsplash.com/photo-1541252260730-0412e8e2108e?w=800', 'https://images.unsplash.com/photo-1551698618-1dfe5d97d256?w=800'],
-  okonomi: ['https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800', 'https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?w=800'],
-  teknologi: ['https://images.unsplash.com/photo-1518770660439-4636190af475?w=800', 'https://images.unsplash.com/photo-1531297484001-80022131f5a1?w=800'],
-  helse: ['https://images.unsplash.com/photo-1576091160550-2173dba999ef?w=800', 'https://images.unsplash.com/photo-1559757175-0eb30cd8c063?w=800'],
-  kultur: ['https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=800', 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800'],
-  klima: ['https://images.unsplash.com/photo-1569163139394-de4e4f43e4e3?w=800', 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800'],
-  politikk: ['https://images.unsplash.com/photo-1529107386315-e1a2ed48a620?w=800', 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?w=800'],
-  krig: ['https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800', 'https://images.unsplash.com/photo-1590012314607-cda9d9b699ae?w=800'],
-  default: ['https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800', 'https://images.unsplash.com/photo-1495020689067-958852a7765e?w=800'],
+// SVG gradient fallbacks per category (used when RSS has no image)
+const CATEGORY_GRADIENTS = {
+  innenriks: ['#d4202a', '#8b1a1a'],
+  utenriks: ['#1e3a5f', '#3b82f6'],
+  sport: ['#16a34a', '#22c55e'],
+  okonomi: ['#b45309', '#f59e0b'],
+  teknologi: ['#7c3aed', '#8b5cf6'],
+  helse: ['#dc2626', '#f87171'],
+  kultur: ['#9333ea', '#c084fc'],
+  klima: ['#047857', '#34d399'],
+  politikk: ['#1e40af', '#60a5fa'],
+  krig: ['#78350f', '#a16207'],
+  default: ['#374151', '#6b7280'],
+};
+
+const CATEGORY_ICONS = {
+  innenriks: '🇳🇴', utenriks: '🌍', sport: '⚽', okonomi: '📈',
+  teknologi: '💻', helse: '🏥', kultur: '🎭', klima: '🌱',
+  politikk: '🏛️', krig: '⚔️', default: '📰',
 };
 
 function detectCategory(title, description) {
@@ -39,14 +46,53 @@ function estimateReadingTime(title, description) {
   return Math.max(1, Math.round((wordCount * 5) / 200));
 }
 
-function getImageForCategory(category, index) {
-  const imgs = UNSPLASH_IMAGES[category] || UNSPLASH_IMAGES.default;
-  return imgs[index % imgs.length];
+function getPlaceholderSvg(category) {
+  const [c1, c2] = CATEGORY_GRADIENTS[category] || CATEGORY_GRADIENTS.default;
+  const icon = CATEGORY_ICONS[category] || CATEGORY_ICONS.default;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450">
+    <defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:${c1}"/><stop offset="100%" style="stop-color:${c2}"/>
+    </linearGradient></defs>
+    <rect width="800" height="450" fill="url(#g)"/>
+    <text x="400" y="225" text-anchor="middle" dominant-baseline="central" font-size="80">${icon}</text>
+  </svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function getImageForCategory(category) {
+  return getPlaceholderSvg(category);
 }
 
 function isPlus(title, description) {
   const text = (title + ' ' + (description || '')).toLowerCase();
   return text.includes('+') || text.includes('pluss') || text.includes('premium') || text.includes('abonnent');
+}
+
+function extractImage(item) {
+  // Try media:content (NRK, Guardian)
+  const mediaContent = item.getElementsByTagNameNS('http://search.yahoo.com/mrss/', 'content');
+  if (mediaContent.length) {
+    const url = mediaContent[0].getAttribute('url');
+    if (url && url.match(/\.(jpg|jpeg|png|gif|webp)/i)) return url;
+  }
+  // Try media:thumbnail (BBC, France24)
+  const mediaThumbnail = item.getElementsByTagNameNS('http://search.yahoo.com/mrss/', 'thumbnail');
+  if (mediaThumbnail.length) {
+    const url = mediaThumbnail[0].getAttribute('url');
+    if (url) return url;
+  }
+  // Try enclosure (VG, Aftenposten, E24)
+  const enclosure = item.querySelector('enclosure');
+  if (enclosure) {
+    const url = enclosure.getAttribute('url');
+    const type = enclosure.getAttribute('type') || '';
+    if (url && (type.startsWith('image/') || url.match(/\.(jpg|jpeg|png|gif|webp)/i))) return url;
+  }
+  // Try image in description HTML
+  const descHtml = item.querySelector('description')?.textContent || '';
+  const imgMatch = descHtml.match(/<img[^>]+src=["']([^"']+)/);
+  if (imgMatch) return imgMatch[1];
+  return null;
 }
 
 async function fetchFeed(source) {
@@ -59,21 +105,23 @@ async function fetchFeed(source) {
     const parser = new DOMParser();
     const xml = parser.parseFromString(text, 'text/xml');
     const items = Array.from(xml.querySelectorAll('item'));
-    return items.slice(0, 10).map((item, idx) => {
+    return items.slice(0, 15).map((item, idx) => {
       const title = item.querySelector('title')?.textContent || '';
-      const description = item.querySelector('description')?.textContent?.replace(/<[^>]+>/g, '') || '';
+      const rawDesc = item.querySelector('description')?.textContent || '';
+      const description = rawDesc.replace(/<[^>]+>/g, '').trim();
       const link = item.querySelector('link')?.textContent || '';
       const pubDate = item.querySelector('pubDate')?.textContent || '';
       const category = detectCategory(title, description);
       const region = source.isInternational ? detectRegion(title, description) : null;
+      const rssImage = extractImage(item);
       return {
         id: `${source.id}-${idx}-${Date.now()}`,
-        title, description: description.slice(0, 200), link,
+        title, description: description.slice(0, 500), link,
         source: source.name, sourceId: source.id, sourceColor: source.color,
         isInternational: source.isInternational || false,
         pubDate: pubDate ? new Date(pubDate) : new Date(),
         category, region,
-        image: getImageForCategory(category, idx),
+        image: rssImage || getImageForCategory(category, idx),
         isPlus: isPlus(title, description),
         trendScore: Math.floor(Math.random() * 100),
         readingTime: estimateReadingTime(title, description),
@@ -100,13 +148,6 @@ function getMockArticles(source) {
       { title: 'Nye regler for el-sparkesykler i Oslo', desc: 'Fra 1. april kreves hjelm og aldersgrense heves til 18 år.' },
       { title: 'Norsk tennisstjerne til Grand Slam-finale', desc: 'Casper Ruud er klar for semifinale.' },
     ],
-    dagbladet: [
-      { title: 'Kjendis åpner opp om psykisk helse', desc: 'I et åpent intervju deler den kjente TV-profilen sin kamp mot angst.' },
-      { title: 'Boligprisene stuper i Oslo', desc: 'Gjennomsnittlig kvadratmeterpris i Oslo falt 4% siste måned.' },
-      { title: 'Politiet advarer mot ny svindel', desc: 'Svindlere utgir seg for å være fra politiet og ber folk om bankopplysninger.' },
-      { title: 'Matvarekjedene tjener rekordmye', desc: 'Norgesgruppen rapporterer rekordhøyt overskudd midt i priskrisen.' },
-      { title: 'Ny norsk film nominert til Oscar', desc: 'Den norske filmen er nominert i kategorien Beste internasjonale film.' },
-    ],
     aftenposten: [
       { title: 'Oslo kommune øker skatten neste år', desc: 'Bystyret vedtok budsjett med skatteøkning for å dekke underskudd.' },
       { title: 'Norsk AI-selskap børsnotert på Nasdaq', desc: 'Oslo-baserte selskap debuterte med en markedsverdi på 12 milliarder.' },
@@ -114,26 +155,12 @@ function getMockArticles(source) {
       { title: 'Universitetet Oslo varsler 400 kutt', desc: 'Budsjettkutt tvinger UiO til å si opp over 400 ansatte innen 2026.' },
       { title: 'Ny rapport: Oslo er Europas dyreste by', desc: 'Oslo klatrer til toppen av europeisk levekostnadsindeks.' },
     ],
-    tv2: [
-      { title: 'Dramatisk redningsaksjon i Geirangerfjorden', desc: 'Helikopter og redningsskøyte hentet ut 12 turister som satt fast.' },
-      { title: 'Ny norsk serie topper Netflix-listen', desc: 'Serien er nå den mest sette på Netflix i Norden.' },
-      { title: 'Temperaturen slår rekord i Finnmark', desc: '32 grader i Karasjok – ny junirekord for Nord-Norge.' },
-      { title: 'Minister trekker seg etter skandale', desc: 'Næringsministeren går av etter avsløringer om dobbeltroller.' },
-      { title: 'Norsk fotballag klar for EM-semifinale', desc: 'Landslaget slo Italia 2-1 i en dramatisk kvartfinale.' },
-    ],
     e24: [
       { title: 'Oslo Børs opp 2 prosent etter rentebeslutning', desc: 'Norges Bank holdt renten uendret, noe markedet reagerte positivt på.' },
       { title: 'Equinor varsler nytt funn i Barentshavet', desc: 'Funn anslås til 150 millioner fat oljeekvivalenter.' },
       { title: 'Oljeprisen faller kraftig på lavere etterspørsel', desc: 'Brent-olje handles nå under 70 dollar fatet.' },
       { title: 'Norsk krone svekkes mot euro', desc: 'Kronekursen er nå på det svakeste mot euro siden 2020.' },
       { title: 'Sjømat-eksporten rekordhøy i første kvartal', desc: 'Norge eksporterte sjømat for 40 milliarder i årets tre første måneder.' },
-    ],
-    dn: [
-      { title: 'Milliardærene ble rikere i fjor', desc: 'Norges 100 rikeste økte formuen med 18% samlet i fjor.' },
-      { title: 'Ny tech-gigant slår seg ned i Oslo', desc: 'Amazon Web Services åpner datasenter med 2000 arbeidsplasser.' },
-      { title: 'Fondsforvalter anbefaler gull', desc: 'Etter børsuro anbefaler flere forvaltere økt eksponering mot gull.' },
-      { title: 'Skatte-sjokk for norske aksjonærer', desc: 'Nye regler treffer særlig eiere av unoterte aksjer hardt.' },
-      { title: 'Norsk eiendomsmarked: Hva skjer videre?', desc: 'Analytikerne er uenige om boligmarkedet vil stige eller falle.' },
     ],
     bbc: [
       { title: 'Ukraine launches major counteroffensive in Donbas', desc: 'Ukrainian forces push back Russian troops in the eastern region, gaining 30km of territory.' },
@@ -162,20 +189,6 @@ function getMockArticles(source) {
       { title: 'US-China trade war escalates with new tariff rounds', desc: 'Washington announces 25% tariffs on Chinese electric vehicles, Beijing threatens retaliation.' },
       { title: 'Israel war crimes probe: ICC issues arrest warrants', desc: 'The International Criminal Court issues historic warrants over Gaza offensive.' },
       { title: 'French farmers blockade Paris over EU agricultural policy', desc: 'Tractors surround capital as agricultural crisis grips Europe.' },
-    ],
-    apnews: [
-      { title: 'US Federal Reserve signals rate cut as inflation eases', desc: 'Fed Chair Powell says inflation data supports easing monetary policy this summer.' },
-      { title: 'Germany bans Chinese 5G components from networks', desc: 'Berlin follows US and UK in excluding Huawei from critical telecommunications infrastructure.' },
-      { title: 'Mexico cartel leader captured after month-long operation', desc: 'Federal police arrested the head of the Sinaloa cartel in Culiacan.' },
-      { title: 'South Korea election: Opposition wins landslide victory', desc: 'Democratic Party secures two-thirds of parliamentary seats in historic vote.' },
-      { title: 'Global food prices rise for third straight month', desc: 'FAO index shows 2.1% increase driven by grain and dairy costs worldwide.' },
-    ],
-    dw: [
-      { title: 'Germany energy transition: Progress and pitfalls', desc: 'Renewables now cover 65% of German electricity, but grid stability remains a challenge.' },
-      { title: 'Poland strengthens NATO eastern flank with record spending', desc: 'Warsaw announces 5% of GDP defence spending commitment, highest in alliance.' },
-      { title: 'Hungary blocks EU aid package to Ukraine', desc: 'Viktor Orbán veto stalls 5bn euro military support fund in Brussels.' },
-      { title: 'Spanish general strike over housing crisis hits major cities', desc: 'Millions march in Madrid and Barcelona against soaring rents and evictions.' },
-      { title: 'Italy birth rate hits historic low since 1861 unification', desc: 'Country records fewest births since national unification, government alarmed.' },
     ],
   };
 
