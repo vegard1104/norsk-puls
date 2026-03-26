@@ -85,8 +85,9 @@ function extractImage(item) {
   const enclosure = item.querySelector('enclosure');
   if (enclosure) {
     const url = enclosure.getAttribute('url');
-    const type = enclosure.getAttribute('type') || '';
-    if (url && (type.startsWith('image/') || url.match(/\.(jpg|jpeg|png|gif|webp)/i))) return url;
+    const type = (enclosure.getAttribute('type') || '').toLowerCase();
+    // Accept image/* and also img/* (VG/E24 use non-standard img/jpg)
+    if (url && (type.startsWith('image/') || type.startsWith('img/') || url.match(/\.(jpg|jpeg|png|gif|webp)/i) || url.includes('/images/'))) return url;
   }
   // Try image in description HTML
   const descHtml = item.querySelector('description')?.textContent || '';
