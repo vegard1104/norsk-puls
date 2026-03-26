@@ -274,32 +274,38 @@ function ArticlePanel({ article, onClose, t, mobile }) {
   const [fullContent, setFullContent] = useState(null);
   const [fetchStatus, setFetchStatus] = useState('loading');
 
-  // Swipe-to-dismiss state (mobile only)
-  const [swipeY, setSwipeY] = useState(0);
+  // Swipe-to-dismiss state (mobile only) — horizontal swipe
+  const [swipeX, setSwipeX] = useState(0);
   const [swiping, setSwiping] = useState(false);
-  const touchStartRef = useRef({ y: 0, scrollTop: 0 });
+  const touchStartRef = useRef({ x: 0, y: 0, decided: false });
 
   function handleTouchStart(e) {
     if (!mobile) return;
-    const el = scrollRef.current;
-    touchStartRef.current = { y: e.touches[0].clientY, scrollTop: el?.scrollTop || 0 };
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, decided: false };
   }
   function handleTouchMove(e) {
     if (!mobile) return;
+    const dx = e.touches[0].clientX - touchStartRef.current.x;
     const dy = e.touches[0].clientY - touchStartRef.current.y;
-    // Only allow swipe down when scrolled to top
-    if (touchStartRef.current.scrollTop <= 0 && dy > 10) {
+    // Decide direction on first significant move
+    if (!touchStartRef.current.decided) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return; // too small
+      touchStartRef.current.decided = true;
+      // If vertical movement dominates, let the browser scroll normally
+      if (Math.abs(dy) > Math.abs(dx)) return;
+    }
+    // Only track horizontal swipes
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 10) {
       setSwiping(true);
-      setSwipeY(Math.max(0, dy));
-      e.preventDefault();
+      setSwipeX(dx);
     }
   }
   function handleTouchEnd() {
     if (!mobile || !swiping) return;
-    if (swipeY > 120) {
-      handleClose(); // Dismiss
+    if (Math.abs(swipeX) > 100) {
+      handleClose(); // Dismiss on sufficient swipe in either direction
     } else {
-      setSwipeY(0);
+      setSwipeX(0);
     }
     setSwiping(false);
   }
@@ -314,7 +320,7 @@ function ArticlePanel({ article, onClose, t, mobile }) {
   useEffect(() => {
     if (!article) return;
     setFullContent(null); setFetchStatus('loading');
-    setSwipeY(0); setSwiping(false);
+    setSwipeX(0); setSwiping(false);
     fetchFullContent(article.link).then(content => {
       if (content?.length > 0) { setFullContent(content); setFetchStatus('ok'); }
       else if (article.link === '#') { setFetchStatus('mock'); }
@@ -347,18 +353,12 @@ function ArticlePanel({ article, onClose, t, mobile }) {
 
   const panelWidth = mobile ? '100%' : '46%';
   const panelMaxWidth = mobile ? '100%' : 680;
-  const swipeOpacity = mobile ? Math.max(0.2, 1 - swipeY / 300) : 1;
+  const swipeOpacity = mobile ? Math.max(0.2, 1 - Math.abs(swipeX) / 250) : 1;
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: mobile ? 'column' : 'row' }}>
       {!mobile && (
         <div onClick={handleClose} style={{ flex: 1, background: 'rgba(0,0,0,0.6)', cursor: 'pointer', backdropFilter: 'blur(3px)', animation: 'fadeIn 0.2s ease' }} />
-      )}
-      {/* Swipe indicator on mobile */}
-      {mobile && swipeY > 20 && (
-        <div style={{ position: 'absolute', top: swipeY - 30, left: '50%', transform: 'translateX(-50%)', zIndex: 1100, background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '6px 16px', borderRadius: 20, fontSize: 12, fontWeight: 600, opacity: Math.min(1, swipeY / 80) }}>
-          {swipeY > 120 ? 'Slipp for å lukke' : 'Dra ned for å lukke'}
-        </div>
       )}
       <div ref={scrollRef} onScroll={handleScroll}
         onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
@@ -367,14 +367,19 @@ function ArticlePanel({ article, onClose, t, mobile }) {
         background: t.surface, overflowY: 'auto',
         display: 'flex', flexDirection: 'column',
         boxShadow: mobile ? 'none' : '-6px 0 50px rgba(0,0,0,0.35)',
-        animation: (!swiping && swipeY === 0) ? (mobile ? 'slideUp 0.3s ease' : 'slideIn 0.25s ease') : 'none',
+        animation: (!swiping && swipeX === 0) ? (mobile ? 'slideUp 0.3s ease' : 'slideIn 0.25s ease') : 'none',
         flex: mobile ? 1 : 'none',
-        transform: mobile && swipeY > 0 ? `translateY(${swipeY}px)` : 'none',
+        transform: mobile && swipeX !== 0 ? `translateX(${swipeX}px) rotate(${swipeX * 0.03}deg)` : 'none',
         opacity: swipeOpacity,
         transition: swiping ? 'none' : 'transform 0.25s ease, opacity 0.25s ease',
-        touchAction: 'pan-y',
       }}>
         {/* Header */}
+        {/* Mobile swipe handle */}
+        {mobile && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '8px 0 0' }}>
+            <div style={{ width: 36, height: 4, borderRadius: 2, background: t.border }} />
+          </div>
+        )}
         <div style={{ position: 'sticky', top: 0, background: t.surface, borderBottom: `1px solid ${t.border}`, padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: article.sourceColor }} />
