@@ -32,6 +32,9 @@ const GLOBAL_CSS = `
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  @media (max-width: 767px) {
+    .card-hover:hover { transform: none; }
+  }
 `;
 
 // ─── WPM Toast ───────────────────────────────────────────────────────────────
@@ -475,45 +478,61 @@ function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
   const timeAgo = (() => {
     const h = Math.floor((Date.now() - article.pubDate) / 3600000);
     if (h < 1) return 'Nå';
-    if (h < 24) return `${h}t`;
-    return `${Math.floor(h / 24)}d`;
+    if (h < 24) return `${h}t siden`;
+    return `${Math.floor(h / 24)}d siden`;
   })();
+
+  const catLabel = CATEGORIES.find(c => c.id === article.category)?.label || '';
 
   // ── HERO ──────────────────────────────────────────────────────────────────
   if (isHero) {
+    if (mobile) {
+      // Mobile hero: clean editorial style — image on top, text below (Aftenposten-inspired)
+      return (
+        <div onClick={() => onClick(article)} style={{ cursor: 'pointer', background: t.surface, overflow: 'hidden' }}>
+          <div style={{ position: 'relative' }}>
+            <img src={article.image} alt="" style={{ width: '100%', height: 220, objectFit: 'cover', display: 'block' }} loading="lazy" />
+            {article.isPlus && <div style={{ position: 'absolute', top: 12, right: 12, background: '#d97706', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 3, letterSpacing: 0.5 }}>PLUSS</div>}
+          </div>
+          <div style={{ padding: '14px 16px 18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.accent, textTransform: 'uppercase', letterSpacing: 0.5 }}>{catLabel}</span>
+              <span style={{ fontSize: 11, color: t.textMuted }}>{timeAgo}</span>
+            </div>
+            <h2 style={{ color: t.text, fontSize: 22, fontWeight: 800, lineHeight: 1.25, margin: '0 0 8px' }}>{article.title}</h2>
+            {article.description && (
+              <p style={{ color: t.textSec, fontSize: 14, lineHeight: 1.5, margin: '0 0 10px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{article.description}</p>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: article.sourceColor }}>{article.source}</span>
+              <span style={{ fontSize: 11, color: t.textMuted }}>~{article.readingTime} min</span>
+              {article.popularity > 0 && <span style={{ fontSize: 11, color: t.textMuted }}>{formatPopularity(article.popularity)} lesere</span>}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    // Desktop hero
     return (
       <div onClick={() => onClick(article)} className="card-hover" style={{
         position: 'relative', borderRadius: 18, overflow: 'hidden', cursor: 'pointer',
-        height: mobile ? 280 : 420, boxShadow: '0 4px 24px rgba(0,0,0,0.22)',
-        background: '#111',
+        height: 420, boxShadow: '0 4px 24px rgba(0,0,0,0.22)', background: '#111',
       }}>
         <img src={article.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.85 }} loading="lazy" />
-        {/* Full overlay gradient */}
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.3) 50%, transparent 100%)' }} />
-
-        {/* Top badges */}
         <div style={{ position: 'absolute', top: 14, left: 14, display: 'flex', gap: 6 }}>
-          <span style={{ background: t.accent, color: '#fff', fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            {CATEGORY_EMOJIS[article.category]} {CATEGORIES.find(c => c.id === article.category)?.label || 'Nyheter'}
-          </span>
+          <span style={{ background: t.accent, color: '#fff', fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: 0.5 }}>{catLabel || 'Nyheter'}</span>
           {article.isPlus && <span style={{ background: '#d97706', color: '#fff', fontSize: 10, fontWeight: 800, padding: '3px 9px', borderRadius: 4 }}>PLUSS</span>}
         </div>
-
-        {/* Bottom content */}
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: mobile ? '16px 16px 20px' : '20px 24px 24px' }}>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 24px 24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <span style={{ background: article.sourceColor, color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4 }}>{article.source}</span>
             <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>{timeAgo}</span>
             <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>~{article.readingTime} min</span>
-            {article.popularity > 0 && <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>👁 {formatPopularity(article.popularity)}</span>}
           </div>
-          <h2 style={{ color: '#fff', fontSize: mobile ? 20 : 26, fontWeight: 800, lineHeight: 1.25, margin: 0, textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>
-            {article.title}
-          </h2>
+          <h2 style={{ color: '#fff', fontSize: 26, fontWeight: 800, lineHeight: 1.25, margin: 0, textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>{article.title}</h2>
           {article.description && (
-            <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: mobile ? 13 : 14, lineHeight: 1.5, margin: '8px 0 0', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: mobile ? 2 : 3, WebkitBoxOrient: 'vertical' }}>
-              {article.description}
-            </p>
+            <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: 14, lineHeight: 1.5, margin: '8px 0 0', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>{article.description}</p>
           )}
         </div>
       </div>
@@ -522,37 +541,50 @@ function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
 
   // ── MEDIUM ────────────────────────────────────────────────────────────────
   if (isMedium) {
+    if (mobile) {
+      // Mobile medium: horizontal card — text left, thumbnail right (BBC-inspired)
+      return (
+        <div onClick={() => onClick(article)} style={{
+          background: t.surface, cursor: 'pointer',
+          display: 'flex', flexDirection: 'row', alignItems: 'stretch',
+          borderBottom: `1px solid ${t.border}`, padding: '14px 16px', gap: 14,
+        }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4, minWidth: 0 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: t.accent, textTransform: 'uppercase', letterSpacing: 0.3 }}>{catLabel}</span>
+            <div style={{ fontSize: 15, fontWeight: 700, color: t.text, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }}>{article.title}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: article.sourceColor }}>{article.source}</span>
+              <span style={{ fontSize: 11, color: t.textMuted }}>{timeAgo}</span>
+            </div>
+          </div>
+          <div style={{ width: 100, height: 100, flexShrink: 0, borderRadius: 8, overflow: 'hidden', position: 'relative' }}>
+            <img src={article.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} loading="lazy" />
+            {article.isPlus && <div style={{ position: 'absolute', top: 4, right: 4, background: '#d97706', color: '#fff', fontSize: 8, fontWeight: 700, padding: '1px 5px', borderRadius: 2 }}>PLUSS</div>}
+          </div>
+        </div>
+      );
+    }
+    // Desktop medium
     return (
       <div onClick={() => onClick(article)} className="card-hover" style={{
         background: t.surface, borderRadius: 14, overflow: 'hidden', cursor: 'pointer',
         boxShadow: t.cardShadow, display: 'flex', flexDirection: 'column',
         border: `1px solid ${t.border}`,
       }}>
-        {/* Image */}
         <div style={{ position: 'relative', height: 160, overflow: 'hidden', flexShrink: 0 }}>
           <img src={article.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform 0.3s' }} loading="lazy" />
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.5) 0%, transparent 60%)' }} />
           <div style={{ position: 'absolute', top: 10, left: 10 }}>
             <span style={{ background: article.sourceColor, color: '#fff', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 3 }}>{article.source}</span>
           </div>
-          {article.isPlus && (
-            <div style={{ position: 'absolute', top: 10, right: 10, background: '#d97706', color: '#fff', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 3 }}>PLUSS</div>
-          )}
-          <div style={{ position: 'absolute', bottom: 8, left: 10, color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>{timeAgo} · ~{article.readingTime} min{article.popularity > 0 ? ` · 👁 ${formatPopularity(article.popularity)}` : ''}</div>
+          {article.isPlus && <div style={{ position: 'absolute', top: 10, right: 10, background: '#d97706', color: '#fff', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 3 }}>PLUSS</div>}
+          <div style={{ position: 'absolute', bottom: 8, left: 10, color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>{timeAgo} · ~{article.readingTime} min</div>
         </div>
-
-        {/* Text */}
         <div style={{ padding: '12px 14px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ background: t.surface2, color: t.textMuted, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 3, alignSelf: 'flex-start', textTransform: 'uppercase', letterSpacing: 0.4 }}>
-            {CATEGORY_EMOJIS[article.category]} {CATEGORIES.find(c => c.id === article.category)?.label || ''}
-          </span>
-          <div style={{ fontSize: 15, fontWeight: 700, color: t.text, lineHeight: 1.3, flex: 1 }}>
-            {article.title}
-          </div>
+          <span style={{ background: t.surface2, color: t.textMuted, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 3, alignSelf: 'flex-start', textTransform: 'uppercase', letterSpacing: 0.4 }}>{catLabel}</span>
+          <div style={{ fontSize: 15, fontWeight: 700, color: t.text, lineHeight: 1.3, flex: 1 }}>{article.title}</div>
           {article.description && (
-            <div style={{ fontSize: 12, color: t.textSec, lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-              {article.description}
-            </div>
+            <div style={{ fontSize: 12, color: t.textSec, lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{article.description}</div>
           )}
         </div>
       </div>
@@ -560,33 +592,45 @@ function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
   }
 
   // ── SMALL ─────────────────────────────────────────────────────────────────
+  if (mobile) {
+    // Mobile small: clean text-only list item with divider (Aftenposten-inspired)
+    return (
+      <div onClick={() => onClick(article)} style={{
+        cursor: 'pointer', padding: '14px 16px',
+        borderBottom: `1px solid ${t.border}`, background: t.surface,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: article.sourceColor }}>{article.source}</span>
+          <span style={{ fontSize: 11, color: t.textMuted }}>{timeAgo}</span>
+          {article.isPlus && <span style={{ fontSize: 10, fontWeight: 700, color: '#d97706' }}>PLUSS</span>}
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: t.text, lineHeight: 1.35, marginBottom: 4 }}>{article.title}</div>
+        {article.description && (
+          <div style={{ fontSize: 13, color: t.textSec, lineHeight: 1.4, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{article.description}</div>
+        )}
+      </div>
+    );
+  }
+  // Desktop small
   return (
     <div onClick={() => onClick(article)} className="card-hover" style={{
       background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12,
       overflow: 'hidden', cursor: 'pointer', boxShadow: t.cardShadow,
       display: 'flex', flexDirection: 'row', alignItems: 'stretch',
     }}>
-      {/* Source stripe */}
       <div style={{ width: 3, background: article.sourceColor, flexShrink: 0 }} />
-      {/* Thumbnail */}
-      <div style={{ width: mobile ? 95 : 88, height: mobile ? 95 : 80, flexShrink: 0, overflow: 'hidden', position: 'relative' }}>
+      <div style={{ width: 88, height: 80, flexShrink: 0, overflow: 'hidden' }}>
         <img src={article.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} loading="lazy" />
       </div>
-      {/* Text */}
       <div style={{ padding: '9px 12px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: article.sourceColor }}>{article.source}</span>
-          <span style={{ fontSize: 10, color: t.textMuted }}>· {timeAgo}</span>
-          <span style={{ fontSize: 10, color: t.textMuted }}>· ~{article.readingTime} min</span>
-          {article.popularity > 0 && <span style={{ fontSize: 10, color: t.textMuted }}>· 👁 {formatPopularity(article.popularity)}</span>}
+          <span style={{ fontSize: 10, color: t.textMuted }}>{timeAgo}</span>
+          <span style={{ fontSize: 10, color: t.textMuted }}>~{article.readingTime} min</span>
         </div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: t.text, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-          {article.title}
-        </div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: t.text, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{article.title}</div>
         {article.description && (
-          <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.35, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}>
-            {article.description}
-          </div>
+          <div style={{ fontSize: 11, color: t.textSec, lineHeight: 1.35, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical' }}>{article.description}</div>
         )}
       </div>
     </div>
@@ -623,29 +667,51 @@ function NewsFeed({ articles, loading, t, onToast, mobile }) {
   );
 
   const hero    = articles[0];
-  const mediums = articles.slice(1, mobile ? 3 : 4);
-  const smalls  = articles.slice(mobile ? 3 : 4);
+  const mediums = articles.slice(1, mobile ? 4 : 4);
+  const smalls  = articles.slice(mobile ? 4 : 4);
 
   return (
     <>
       {selectedArticle && <ArticlePanel article={selectedArticle} onClose={handleClose} t={t} mobile={mobile} />}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: mobile ? 12 : 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: mobile ? 0 : 16 }}>
         {/* Hero */}
         {hero && <ArticleCard article={hero} size="hero" onClick={handleOpen} t={t} mobile={mobile} />}
 
-        {/* Medium grid */}
+        {/* Divider on mobile after hero */}
+        {mobile && <div style={{ height: 8, background: t.bg }} />}
+
+        {/* Medium cards — single column on mobile, grid on desktop */}
         {mediums.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr 1fr' : `repeat(${mediums.length}, 1fr)`, gap: mobile ? 10 : 14 }}>
-            {mediums.map(a => <ArticleCard key={a.id} article={a} size="medium" onClick={handleOpen} t={t} mobile={mobile} />)}
+          mobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {mediums.map(a => <ArticleCard key={a.id} article={a} size="medium" onClick={handleOpen} t={t} mobile={mobile} />)}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${mediums.length}, 1fr)`, gap: 14 }}>
+              {mediums.map(a => <ArticleCard key={a.id} article={a} size="medium" onClick={handleOpen} t={t} mobile={mobile} />)}
+            </div>
+          )
+        )}
+
+        {/* Section divider on mobile */}
+        {mobile && smalls.length > 0 && (
+          <div style={{ padding: '16px 16px 8px', background: t.bg }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Flere saker</div>
           </div>
         )}
 
-        {/* Small cards — 2-column grid on desktop, single col on mobile */}
+        {/* Small cards */}
         {smalls.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: mobile ? 8 : 10 }}>
-            {smalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
-          </div>
+          mobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {smalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              {smalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
+            </div>
+          )
         )}
       </div>
     </>
@@ -740,49 +806,53 @@ function NewsApp() {
       {showStats && <StatsSidebar t={t} avatar={avatar} onAvatarChange={handleAvatarChange} onClose={() => setShowStats(false)} mobile={mobile} />}
 
       {/* ── Header ── */}
-      <header style={{ background: t.headerBg, borderBottom: `1px solid ${t.border}`, position: 'sticky', top: 0, zIndex: 200, boxShadow: isDark ? 'none' : '0 1px 8px rgba(0,0,0,0.08)' }}>
-        <div style={{ maxWidth: 1300, margin: '0 auto', padding: mobile ? '0 14px' : '0 20px', display: 'flex', alignItems: 'center', height: mobile ? 52 : 56, gap: mobile ? 10 : 14 }}>
+      <header style={{ background: t.headerBg, borderBottom: `1px solid ${t.border}`, position: 'sticky', top: 0, zIndex: 200, boxShadow: isDark ? 'none' : '0 1px 4px rgba(0,0,0,0.05)' }}>
+        <div style={{ maxWidth: 1300, margin: '0 auto', padding: mobile ? '0 16px' : '0 20px', display: 'flex', alignItems: 'center', height: mobile ? 48 : 56, gap: mobile ? 8 : 14 }}>
 
           {/* Logo */}
-          <div style={{ fontSize: mobile ? 15 : 17, fontWeight: 900, color: t.text, display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-            <span style={{ color: t.accent }}>●</span>{mobile ? 'NP' : 'NORSK PULS'}
+          <div style={{ fontSize: mobile ? 16 : 17, fontWeight: 900, color: t.text, display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, letterSpacing: mobile ? 0.5 : 0 }}>
+            <span style={{ color: t.accent, fontSize: mobile ? 8 : 10 }}>●</span>{mobile ? 'Norsk Puls' : 'NORSK PULS'}
           </div>
 
-          {/* Tabs */}
-          <nav style={{ display: 'flex', gap: 2, flex: 1, overflowX: 'auto', scrollbarWidth: 'none' }}>
-            {tabs.map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
-                background: activeTab === tab.id ? t.surface2 : 'transparent',
-                border: activeTab === tab.id ? `1px solid ${t.border}` : '1px solid transparent',
-                color: activeTab === tab.id ? t.text : t.textSec,
-                fontWeight: activeTab === tab.id ? 700 : 400,
-                fontSize: mobile ? 12 : 13, padding: mobile ? '4px 10px' : '5px 12px', borderRadius: 8, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
-              }}>
-                {tab.label}
-                {tab.badge > 0 && <span style={{ background: t.accent, color: '#fff', borderRadius: 10, padding: '0 5px', fontSize: 10 }}>{tab.badge}</span>}
-              </button>
-            ))}
-          </nav>
+          {/* Tabs — hidden on mobile (use bottom nav) */}
+          {!mobile && (
+            <nav style={{ display: 'flex', gap: 2, flex: 1, overflowX: 'auto', scrollbarWidth: 'none' }}>
+              {tabs.map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+                  background: activeTab === tab.id ? t.surface2 : 'transparent',
+                  border: activeTab === tab.id ? `1px solid ${t.border}` : '1px solid transparent',
+                  color: activeTab === tab.id ? t.text : t.textSec,
+                  fontWeight: activeTab === tab.id ? 700 : 400,
+                  fontSize: 13, padding: '5px 12px', borderRadius: 8, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                }}>
+                  {tab.label}
+                  {tab.badge > 0 && <span style={{ background: t.accent, color: '#fff', borderRadius: 10, padding: '0 5px', fontSize: 10 }}>{tab.badge}</span>}
+                </button>
+              ))}
+            </nav>
+          )}
+          {mobile && <div style={{ flex: 1 }} />}
 
           {/* Right controls */}
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: mobile ? 4 : 6, alignItems: 'center', flexShrink: 0 }}>
             {!mobile && (
               <div style={{ background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 20, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#d97706' }}>
-                🏆 {(stats.points || 0).toLocaleString('no')}
+                {(stats.points || 0).toLocaleString('no')} p
               </div>
             )}
-            <button onClick={toggleTheme} title="Bytt tema" style={{ background: t.surface2, border: `1px solid ${t.border}`, color: t.textSec, borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <button onClick={toggleTheme} title="Bytt tema" style={{ background: 'transparent', border: 'none', color: t.textSec, borderRadius: 8, width: 36, height: 36, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               {isDark ? '☀️' : '🌙'}
             </button>
-            <button onClick={refresh} title="Oppdater" style={{ background: t.surface2, border: `1px solid ${t.border}`, color: t.textSec, borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>↺</button>
+            <button onClick={refresh} title="Oppdater" style={{ background: 'transparent', border: 'none', color: t.textSec, borderRadius: 8, width: 36, height: 36, cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>↺</button>
             {!mobile && (
               <button onClick={() => setShowAdmin(true)} style={{ background: t.surface2, border: `1px solid ${t.border}`, color: t.textSec, borderRadius: 8, padding: '0 10px', height: 32, cursor: 'pointer', fontSize: 13 }}>Admin</button>
             )}
-            {/* Avatar / profile button */}
-            <div onClick={() => setShowStats(s => !s)} title="Profil & statistikk" style={{ width: 34, height: 34, borderRadius: '50%', overflow: 'hidden', border: `2px solid ${t.accent}`, cursor: 'pointer', flexShrink: 0, background: t.surface3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {avatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 16 }}>👤</span>}
-            </div>
+            {!mobile && (
+              <div onClick={() => setShowStats(s => !s)} title="Profil & statistikk" style={{ width: 34, height: 34, borderRadius: '50%', overflow: 'hidden', border: `2px solid ${t.accent}`, cursor: 'pointer', flexShrink: 0, background: t.surface3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {avatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 16 }}>👤</span>}
+              </div>
+            )}
             {!mobile && (
               <button onClick={logout} style={{ background: 'none', border: `1px solid ${t.border}`, color: t.textMuted, borderRadius: 8, padding: '0 10px', height: 32, cursor: 'pointer', fontSize: 13 }}>Logg ut</button>
             )}
@@ -793,11 +863,11 @@ function NewsApp() {
       {/* ── Trending bar ── */}
       {activeTab === 'news' && trending.length > 0 && (
         <div style={{ background: t.surface, borderBottom: `1px solid ${t.border}` }}>
-          <div style={{ maxWidth: 1300, margin: '0 auto', padding: '8px 16px', display: 'flex', gap: 8, alignItems: 'center', overflowX: 'auto', scrollbarWidth: 'none' }}>
-            <span style={{ color: t.accent, fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>🔥</span>
+          <div style={{ maxWidth: 1300, margin: '0 auto', padding: mobile ? '6px 16px' : '8px 16px', display: 'flex', gap: mobile ? 6 : 8, alignItems: 'center', overflowX: 'auto', scrollbarWidth: 'none' }}>
+            <span style={{ color: t.textMuted, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', textTransform: 'uppercase', letterSpacing: 0.5 }}>Tema</span>
             {trending.map(({ id, label, count }) => (
               <button key={id} onClick={() => setActiveCategory(activeCategory === id ? null : id)} style={chipStyle(activeCategory === id)}>
-                {CATEGORY_EMOJIS[id]} {label} <span style={{ opacity: 0.6 }}>{count}</span>
+                {label}
               </button>
             ))}
             {activeCategory && (
@@ -829,7 +899,7 @@ function NewsApp() {
       )}
 
       {/* ── Main layout ── */}
-      <main style={{ maxWidth: 1300, margin: '0 auto', padding: mobile ? '12px 12px 80px' : '20px', display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+      <main style={{ maxWidth: 1300, margin: '0 auto', padding: mobile ? '0 0 80px' : '20px', display: 'flex', gap: 20, alignItems: 'flex-start' }}>
 
         {/* Desktop sidebar */}
         {!mobile && !showStats && false /* disabled – use avatar button instead */ }
@@ -882,28 +952,33 @@ function NewsApp() {
           background: t.headerBg, borderTop: `1px solid ${t.border}`,
           display: 'flex', alignItems: 'center',
           paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          boxShadow: '0 -1px 8px rgba(0,0,0,0.06)',
         }}>
-          {tabs.map(tab => (
+          {[
+            { id: 'news', icon: '📰', label: 'Norsk' },
+            { id: 'world', icon: '🌍', label: 'Verden' },
+            { id: 'interests', icon: '⭐', label: 'Interesser' },
+          ].map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
               flex: 1, background: 'none', border: 'none', cursor: 'pointer',
-              padding: '10px 6px 8px',
+              padding: '8px 6px 6px',
               color: activeTab === tab.id ? t.accent : t.textMuted,
               fontSize: 11, fontWeight: activeTab === tab.id ? 700 : 400,
               display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
             }}>
-              <span style={{ fontSize: 20 }}>{tab.label.split(' ')[0]}</span>
-              <span style={{ fontSize: 10 }}>{tab.label.split(' ').slice(1).join(' ')}</span>
+              <span style={{ fontSize: 18, opacity: activeTab === tab.id ? 1 : 0.6 }}>{tab.icon}</span>
+              <span style={{ fontSize: 10 }}>{tab.label}</span>
             </button>
           ))}
           <button onClick={() => setShowStats(true)} style={{
             flex: 1, background: 'none', border: 'none', cursor: 'pointer',
-            padding: '10px 6px 8px', color: t.textMuted,
+            padding: '8px 6px 6px', color: t.textMuted,
             display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
           }}>
-            <div style={{ width: 24, height: 24, borderRadius: '50%', overflow: 'hidden', border: `2px solid ${t.accent}`, background: t.surface3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {avatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 12 }}>👤</span>}
+            <div style={{ width: 22, height: 22, borderRadius: '50%', overflow: 'hidden', border: `2px solid ${showStats ? t.accent : t.border}`, background: t.surface3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {avatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: 11 }}>👤</span>}
             </div>
-            <span style={{ fontSize: 10, color: t.textMuted }}>Profil</span>
+            <span style={{ fontSize: 10 }}>Profil</span>
           </button>
         </nav>
       )}
