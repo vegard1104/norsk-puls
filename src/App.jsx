@@ -274,6 +274,36 @@ function ArticlePanel({ article, onClose, t, mobile }) {
   const [fullContent, setFullContent] = useState(null);
   const [fetchStatus, setFetchStatus] = useState('loading');
 
+  // Swipe-to-dismiss state (mobile only)
+  const [swipeY, setSwipeY] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const touchStartRef = useRef({ y: 0, scrollTop: 0 });
+
+  function handleTouchStart(e) {
+    if (!mobile) return;
+    const el = scrollRef.current;
+    touchStartRef.current = { y: e.touches[0].clientY, scrollTop: el?.scrollTop || 0 };
+  }
+  function handleTouchMove(e) {
+    if (!mobile) return;
+    const dy = e.touches[0].clientY - touchStartRef.current.y;
+    // Only allow swipe down when scrolled to top
+    if (touchStartRef.current.scrollTop <= 0 && dy > 10) {
+      setSwiping(true);
+      setSwipeY(Math.max(0, dy));
+      e.preventDefault();
+    }
+  }
+  function handleTouchEnd() {
+    if (!mobile || !swiping) return;
+    if (swipeY > 120) {
+      handleClose(); // Dismiss
+    } else {
+      setSwipeY(0);
+    }
+    setSwiping(false);
+  }
+
   const visibleWords = useMemo(() => {
     if (!article) return 0;
     const base = (article.title + ' ' + (article.description || '')).split(/\s+/).length;
@@ -284,6 +314,7 @@ function ArticlePanel({ article, onClose, t, mobile }) {
   useEffect(() => {
     if (!article) return;
     setFullContent(null); setFetchStatus('loading');
+    setSwipeY(0); setSwiping(false);
     fetchFullContent(article.link).then(content => {
       if (content?.length > 0) { setFullContent(content); setFetchStatus('ok'); }
       else if (article.link === '#') { setFetchStatus('mock'); }
@@ -316,19 +347,32 @@ function ArticlePanel({ article, onClose, t, mobile }) {
 
   const panelWidth = mobile ? '100%' : '46%';
   const panelMaxWidth = mobile ? '100%' : 680;
+  const swipeOpacity = mobile ? Math.max(0.2, 1 - swipeY / 300) : 1;
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: mobile ? 'column' : 'row' }}>
       {!mobile && (
         <div onClick={handleClose} style={{ flex: 1, background: 'rgba(0,0,0,0.6)', cursor: 'pointer', backdropFilter: 'blur(3px)', animation: 'fadeIn 0.2s ease' }} />
       )}
-      <div ref={scrollRef} onScroll={handleScroll} style={{
+      {/* Swipe indicator on mobile */}
+      {mobile && swipeY > 20 && (
+        <div style={{ position: 'absolute', top: swipeY - 30, left: '50%', transform: 'translateX(-50%)', zIndex: 1100, background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '6px 16px', borderRadius: 20, fontSize: 12, fontWeight: 600, opacity: Math.min(1, swipeY / 80) }}>
+          {swipeY > 120 ? 'Slipp for å lukke' : 'Dra ned for å lukke'}
+        </div>
+      )}
+      <div ref={scrollRef} onScroll={handleScroll}
+        onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}
+        style={{
         width: panelWidth, minWidth: mobile ? 'unset' : 360, maxWidth: panelMaxWidth,
         background: t.surface, overflowY: 'auto',
         display: 'flex', flexDirection: 'column',
         boxShadow: mobile ? 'none' : '-6px 0 50px rgba(0,0,0,0.35)',
-        animation: mobile ? 'slideUp 0.3s ease' : 'slideIn 0.25s ease',
+        animation: (!swiping && swipeY === 0) ? (mobile ? 'slideUp 0.3s ease' : 'slideIn 0.25s ease') : 'none',
         flex: mobile ? 1 : 'none',
+        transform: mobile && swipeY > 0 ? `translateY(${swipeY}px)` : 'none',
+        opacity: swipeOpacity,
+        transition: swiping ? 'none' : 'transform 0.25s ease, opacity 0.25s ease',
+        touchAction: 'pan-y',
       }}>
         {/* Header */}
         <div style={{ position: 'sticky', top: 0, background: t.surface, borderBottom: `1px solid ${t.border}`, padding: '12px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }}>
@@ -410,6 +454,13 @@ function ArticlePanel({ article, onClose, t, mobile }) {
   );
 }
 
+// ─── Popularity badge ─────────────────────────────────────────────────────────
+function formatPopularity(n) {
+  if (!n || n < 1) return null;
+  if (n >= 1000) return (n / 1000).toFixed(1).replace('.0', '') + 'k';
+  return String(n);
+}
+
 // ─── Article Card ─────────────────────────────────────────────────────────────
 function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
   const isHero   = size === 'hero';
@@ -449,6 +500,7 @@ function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
             <span style={{ background: article.sourceColor, color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4 }}>{article.source}</span>
             <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>{timeAgo}</span>
             <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 11 }}>~{article.readingTime} min</span>
+            {article.popularity > 0 && <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>👁 {formatPopularity(article.popularity)}</span>}
           </div>
           <h2 style={{ color: '#fff', fontSize: mobile ? 20 : 26, fontWeight: 800, lineHeight: 1.25, margin: 0, textShadow: '0 1px 4px rgba(0,0,0,0.4)' }}>
             {article.title}
@@ -481,7 +533,7 @@ function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
           {article.isPlus && (
             <div style={{ position: 'absolute', top: 10, right: 10, background: '#d97706', color: '#fff', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 3 }}>PLUSS</div>
           )}
-          <div style={{ position: 'absolute', bottom: 8, left: 10, color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>{timeAgo} · ~{article.readingTime} min</div>
+          <div style={{ position: 'absolute', bottom: 8, left: 10, color: 'rgba(255,255,255,0.8)', fontSize: 11 }}>{timeAgo} · ~{article.readingTime} min{article.popularity > 0 ? ` · 👁 ${formatPopularity(article.popularity)}` : ''}</div>
         </div>
 
         {/* Text */}
@@ -521,6 +573,7 @@ function ArticleCard({ article, size = 'small', onClick, t, mobile }) {
           <span style={{ fontSize: 10, fontWeight: 700, color: article.sourceColor }}>{article.source}</span>
           <span style={{ fontSize: 10, color: t.textMuted }}>· {timeAgo}</span>
           <span style={{ fontSize: 10, color: t.textMuted }}>· ~{article.readingTime} min</span>
+          {article.popularity > 0 && <span style={{ fontSize: 10, color: t.textMuted }}>· 👁 {formatPopularity(article.popularity)}</span>}
         </div>
         <div style={{ fontSize: 13, fontWeight: 700, color: t.text, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
           {article.title}

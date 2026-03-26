@@ -7,6 +7,11 @@ export const DEFAULT_SOURCES = [
   { id: 'vg', name: 'VG', rssUrl: 'https://www.vg.no/rss/feed/?limit=20', color: '#e8001c', enabled: true, isInternational: false },
   { id: 'aftenposten', name: 'Aftenposten', rssUrl: 'https://www.aftenposten.no/rss', color: '#004b87', enabled: true, isInternational: false },
   { id: 'e24', name: 'E24', rssUrl: 'https://e24.no/rss', color: '#0066cc', enabled: true, isInternational: false },
+  { id: 'bt', name: 'Bergens Tidende', rssUrl: 'https://www.bt.no/rss', color: '#003366', enabled: true, isInternational: false },
+  { id: 'aftenbladet', name: 'Stavanger Aft.', rssUrl: 'https://www.aftenbladet.no/rss', color: '#0d3b66', enabled: true, isInternational: false },
+  { id: 'adressa', name: 'Adresseavisen', rssUrl: 'https://www.adressa.no/rss', color: '#1a5276', enabled: true, isInternational: false },
+  { id: 'tu', name: 'Teknisk Ukeblad', rssUrl: 'https://www.tu.no/rss', color: '#e74c3c', enabled: true, isInternational: false },
+  { id: 'dagsavisen', name: 'Dagsavisen', rssUrl: 'https://www.dagsavisen.no/rss', color: '#c0392b', enabled: true, isInternational: false },
 ];
 
 export const INTERNATIONAL_SOURCES = [

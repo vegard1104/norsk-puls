@@ -81,12 +81,11 @@ function extractImage(item) {
     const url = mediaThumbnail[0].getAttribute('url');
     if (url) return url;
   }
-  // Try enclosure (VG, Aftenposten, E24)
+  // Try enclosure (VG, Aftenposten, E24, BT, Adresseavisen etc.)
   const enclosure = item.querySelector('enclosure');
   if (enclosure) {
     const url = enclosure.getAttribute('url');
     const type = (enclosure.getAttribute('type') || '').toLowerCase();
-    // Accept image/* and also img/* (VG/E24 use non-standard img/jpg)
     if (url && (type.startsWith('image/') || type.startsWith('img/') || url.match(/\.(jpg|jpeg|png|gif|webp)/i) || url.includes('/images/'))) return url;
   }
   // Try image in description HTML
@@ -94,6 +93,55 @@ function extractImage(item) {
   const imgMatch = descHtml.match(/<img[^>]+src=["']([^"']+)/);
   if (imgMatch) return imgMatch[1];
   return null;
+}
+
+// Fetch og:image from article page (fallback for feeds without images, like Al Jazeera)
+async function fetchOgImage(link) {
+  if (!link || link === '#' || !PROXY_URL) return null;
+  try {
+    const res = await fetch(`${PROXY_URL}/?url=${encodeURIComponent(link)}`, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return doc.querySelector('meta[property="og:image"]')?.getAttribute('content')
+        || doc.querySelector('meta[name="twitter:image"]')?.getAttribute('content')
+        || null;
+  } catch { return null; }
+}
+
+// Deduplicate articles by title similarity
+function deduplicateArticles(articles) {
+  const seen = new Map();
+  return articles.filter(article => {
+    // Normalize title: lowercase, remove punctuation, trim
+    const key = article.title.toLowerCase().replace(/[^a-zæøå0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    // Check for very similar titles (first 40 chars)
+    const shortKey = key.slice(0, 40);
+    if (seen.has(shortKey)) return false;
+    // Also check for exact duplicates
+    if (seen.has(key)) return false;
+    seen.set(key, true);
+    seen.set(shortKey, true);
+    return true;
+  });
+}
+
+// Generate a realistic-looking popularity score
+function generatePopularity(article, idx) {
+  // Base score from source prominence and recency
+  const sourceWeights = { nrk: 1.4, vg: 1.5, aftenposten: 1.1, e24: 0.9, bbc: 1.3, guardian: 1.0, aljazeera: 0.8, france24: 0.7, bt: 0.8, aftenbladet: 0.7, adressa: 0.7, tu: 0.6, dagsavisen: 0.6 };
+  const w = sourceWeights[article.sourceId] || 0.8;
+  const hoursOld = Math.max(0.5, (Date.now() - article.pubDate) / 3600000);
+  const recencyBoost = Math.max(0.3, 1 / (1 + hoursOld * 0.15));
+  // Category interest factor
+  const hotCategories = { krig: 1.3, sport: 1.2, politikk: 1.1, innenriks: 1.0 };
+  const catFactor = hotCategories[article.category] || 0.85;
+  // Deterministic pseudo-random from title hash
+  let hash = 0;
+  for (let i = 0; i < article.title.length; i++) hash = ((hash << 5) - hash + article.title.charCodeAt(i)) | 0;
+  const noise = 0.7 + (Math.abs(hash) % 60) / 100; // 0.7–1.3
+  const raw = w * recencyBoost * catFactor * noise * 800;
+  return Math.round(Math.min(9999, Math.max(12, raw)));
 }
 
 async function fetchFeed(source) {
@@ -115,18 +163,20 @@ async function fetchFeed(source) {
       const category = detectCategory(title, description);
       const region = source.isInternational ? detectRegion(title, description) : null;
       const rssImage = extractImage(item);
-      return {
+      const art = {
         id: `${source.id}-${idx}-${Date.now()}`,
         title, description: description.slice(0, 500), link,
         source: source.name, sourceId: source.id, sourceColor: source.color,
         isInternational: source.isInternational || false,
         pubDate: pubDate ? new Date(pubDate) : new Date(),
         category, region,
-        image: rssImage || getImageForCategory(category, idx),
+        image: rssImage || null, // null means we need to fetch og:image or use placeholder
         isPlus: isPlus(title, description),
-        trendScore: Math.floor(Math.random() * 100),
         readingTime: estimateReadingTime(title, description),
+        popularity: 0, // calculated after creation
       };
+      art.popularity = generatePopularity(art, idx);
+      return art;
     });
   } catch (e) {
     return getMockArticles(source);
@@ -225,13 +275,32 @@ export function useNews(sources) {
     setLoading(true);
     const enabledSources = sources.filter(s => s.enabled);
     const results = await Promise.allSettled(enabledSources.map(fetchFeed));
-    const all = results
+    let all = results
       .filter(r => r.status === 'fulfilled')
       .flatMap(r => r.value);
     all.sort((a, b) => b.pubDate - a.pubDate);
+    // Remove duplicate articles (same story from multiple sources)
+    all = deduplicateArticles(all);
+    // Apply placeholder to articles without images
+    all = all.map(a => ({ ...a, image: a.image || getImageForCategory(a.category) }));
     setArticles(all);
     setLastUpdated(new Date());
     setLoading(false);
+    // Lazy-fetch og:image for articles that got placeholders (Al Jazeera etc.)
+    const noImage = all.filter(a => a.image?.startsWith('data:'));
+    if (noImage.length > 0) {
+      const fetches = noImage.slice(0, 8).map(async a => {
+        const img = await fetchOgImage(a.link);
+        return img ? { id: a.id, image: img } : null;
+      });
+      const resolved = (await Promise.allSettled(fetches))
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .map(r => r.value);
+      if (resolved.length > 0) {
+        const imgMap = Object.fromEntries(resolved.map(r => [r.id, r.image]));
+        setArticles(prev => prev.map(a => imgMap[a.id] ? { ...a, image: imgMap[a.id] } : a));
+      }
+    }
   }, [sources]);
 
   useEffect(() => {
