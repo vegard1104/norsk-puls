@@ -668,7 +668,19 @@ function NewsFeed({ articles, loading, t, onToast, mobile }) {
 
   const hero    = articles[0];
   const mediums = articles.slice(1, mobile ? 4 : 4);
-  const smalls  = articles.slice(mobile ? 4 : 4);
+  const allSmalls = articles.slice(mobile ? 4 : 4);
+
+  // On mobile: split smalls into chunks with image-cards inserted every ~6 articles
+  const CHUNK_SIZE = 6;
+  const mobileChunks = [];
+  if (mobile && allSmalls.length > 0) {
+    let idx = 0;
+    while (idx < allSmalls.length) {
+      const chunk = allSmalls.slice(idx, idx + CHUNK_SIZE);
+      mobileChunks.push(chunk);
+      idx += CHUNK_SIZE;
+    }
+  }
 
   return (
     <>
@@ -694,24 +706,66 @@ function NewsFeed({ articles, loading, t, onToast, mobile }) {
           )
         )}
 
-        {/* Section divider on mobile */}
-        {mobile && smalls.length > 0 && (
-          <div style={{ padding: '16px 16px 8px', background: t.bg }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>Flere saker</div>
-          </div>
-        )}
+        {/* Mobile: alternating text-list chunks with image-card breaks */}
+        {mobile && mobileChunks.length > 0 && mobileChunks.map((chunk, ci) => (
+          <React.Fragment key={`chunk-${ci}`}>
+            {/* Section header */}
+            <div style={{ padding: ci === 0 ? '16px 16px 8px' : '8px 16px 8px', background: t.bg }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                {ci === 0 ? 'Flere saker' : 'Mer å lese'}
+              </div>
+            </div>
 
-        {/* Small cards */}
-        {smalls.length > 0 && (
-          mobile ? (
+            {/* Text-only small cards */}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              {smalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
+              {chunk.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
             </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              {smalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
-            </div>
-          )
+
+            {/* Image-card break after each chunk (except the last) */}
+            {ci < mobileChunks.length - 1 && (() => {
+              // Use the first article from the NEXT chunk as the featured image card
+              const nextChunk = mobileChunks[ci + 1];
+              if (!nextChunk || nextChunk.length === 0) return null;
+              const featured = nextChunk[0];
+              return (
+                <>
+                  <div style={{ height: 8, background: t.bg }} />
+                  <div onClick={() => handleOpen(featured)} style={{ cursor: 'pointer', background: t.surface, overflow: 'hidden' }}>
+                    <div style={{ position: 'relative' }}>
+                      <img src={featured.image} alt="" style={{ width: '100%', height: 180, objectFit: 'cover', display: 'block' }} loading="lazy" />
+                      {featured.isPlus && <div style={{ position: 'absolute', top: 10, right: 10, background: '#d97706', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 3 }}>PLUSS</div>}
+                    </div>
+                    <div style={{ padding: '12px 16px 16px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: t.accent, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                          {CATEGORIES.find(c => c.id === featured.category)?.label || ''}
+                        </span>
+                        <span style={{ fontSize: 11, color: t.textMuted }}>
+                          {(() => { const h = Math.floor((Date.now() - featured.pubDate) / 3600000); return h < 1 ? 'Nå' : h < 24 ? `${h}t siden` : `${Math.floor(h / 24)}d siden`; })()}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 19, fontWeight: 800, color: t.text, lineHeight: 1.25, marginBottom: 6 }}>{featured.title}</div>
+                      {featured.description && (
+                        <div style={{ fontSize: 13, color: t.textSec, lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{featured.description}</div>
+                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: featured.sourceColor }}>{featured.source}</span>
+                        <span style={{ fontSize: 11, color: t.textMuted }}>~{featured.readingTime} min</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ height: 8, background: t.bg }} />
+                </>
+              );
+            })()}
+          </React.Fragment>
+        ))}
+
+        {/* Desktop: all small cards in grid */}
+        {!mobile && allSmalls.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {allSmalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} mobile={mobile} />)}
+          </div>
         )}
       </div>
     </>
