@@ -94,10 +94,170 @@ function WpmSparkline({ sessions, t }) {
   );
 }
 
+// ─── Premium Newspapers Config ───────────────────────────────────────────────
+const PREMIUM_NEWSPAPERS = [
+  { id: 'aftenposten', name: 'Aftenposten', color: '#004b87', domain: 'aftenposten.no' },
+  { id: 'vg', name: 'VG+', color: '#e8001c', domain: 'vg.no' },
+  { id: 'bt', name: 'Bergens Tidende', color: '#003366', domain: 'bt.no' },
+  { id: 'aftenbladet', name: 'Stavanger Aft.', color: '#0d3b66', domain: 'aftenbladet.no' },
+  { id: 'adressa', name: 'Adresseavisen', color: '#1a5276', domain: 'adressa.no' },
+  { id: 'e24', name: 'E24+', color: '#0066cc', domain: 'e24.no' },
+  { id: 'tu', name: 'Teknisk Ukeblad', color: '#e74c3c', domain: 'tu.no' },
+];
+
+function usePremiumSubs() {
+  const [subs, setSubs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('np_premium_subs') || '[]'); } catch { return []; }
+  });
+  function saveSubs(next) { setSubs(next); localStorage.setItem('np_premium_subs', JSON.stringify(next)); }
+  function addSub(newspaperId, email, password) {
+    const next = [...subs.filter(s => s.newspaperId !== newspaperId), { newspaperId, email, password, addedAt: Date.now() }];
+    saveSubs(next);
+  }
+  function removeSub(newspaperId) { saveSubs(subs.filter(s => s.newspaperId !== newspaperId)); }
+  function hasSub(newspaperId) { return subs.some(s => s.newspaperId === newspaperId); }
+  return { subs, addSub, removeSub, hasSub };
+}
+
+// ─── Premium Subscriptions Panel ────────────────────────────────────────────
+function PremiumPanel({ t, mobile, onClose }) {
+  const { subs, addSub, removeSub } = usePremiumSubs();
+  const [adding, setAdding] = useState(null); // newspaperId being added
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  function handleSave() {
+    if (!adding || !email.trim()) return;
+    addSub(adding, email.trim(), password);
+    setAdding(null); setEmail(''); setPassword(''); setShowPassword(false);
+  }
+
+  const activeSubs = subs.map(s => ({ ...s, paper: PREMIUM_NEWSPAPERS.find(p => p.id === s.newspaperId) })).filter(s => s.paper);
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 600, display: 'flex', flexDirection: 'column',
+      background: 'rgba(0,0,0,0.5)',
+    }} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{
+        marginTop: 'auto', background: t.bg, borderRadius: '20px 20px 0 0',
+        padding: '20px 20px 40px', maxHeight: '90vh', overflowY: 'auto',
+        animation: 'slideUp 0.3s ease',
+      }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: t.text }}>Premium Abonnement</div>
+            <div style={{ fontSize: 12, color: t.textMuted, marginTop: 2 }}>Legg til dine avisabonnement for tilgang til pluss-innhold</div>
+          </div>
+          <button onClick={onClose} style={{ background: t.surface2, border: 'none', color: t.textSec, borderRadius: '50%', width: 32, height: 32, cursor: 'pointer', fontSize: 18 }}>×</button>
+        </div>
+
+        {/* Active subscriptions */}
+        {activeSubs.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>Aktive abonnement</div>
+            {activeSubs.map(s => (
+              <div key={s.newspaperId} style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+                background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12, marginBottom: 8,
+              }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.paper.color, flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>{s.paper.name}</div>
+                  <div style={{ fontSize: 12, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.email}</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: '#22c55e', background: '#22c55e18', padding: '2px 8px', borderRadius: 10 }}>Aktiv</span>
+                  <button onClick={() => removeSub(s.newspaperId)} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 16, padding: 4 }} title="Fjern">×</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Add form */}
+        {adding && (
+          <div style={{ background: t.surface, border: `1px solid ${t.accent}40`, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: t.text, marginBottom: 12 }}>
+              Logg inn — {PREMIUM_NEWSPAPERS.find(p => p.id === adding)?.name}
+            </div>
+            <input
+              type="email" placeholder="E-post" value={email}
+              onChange={e => setEmail(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface2, color: t.text, fontSize: 14, marginBottom: 8, outline: 'none' }}
+            />
+            <div style={{ position: 'relative', marginBottom: 12 }}>
+              <input
+                type={showPassword ? 'text' : 'password'} placeholder="Passord" value={password}
+                onChange={e => setPassword(e.target.value)}
+                style={{ width: '100%', padding: '10px 12px', paddingRight: 44, borderRadius: 8, border: `1px solid ${t.border}`, background: t.surface2, color: t.text, fontSize: 14, outline: 'none' }}
+              />
+              <button onClick={() => setShowPassword(!showPassword)} style={{
+                position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 13,
+              }}>{showPassword ? 'Skjul' : 'Vis'}</button>
+            </div>
+            <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 12, lineHeight: 1.4 }}>
+              Innloggingen lagres kun lokalt på din enhet. Vi sender aldri dine opplysninger til tredjepart.
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={handleSave} style={{
+                flex: 1, background: t.accent, color: '#fff', border: 'none', borderRadius: 8,
+                padding: '10px 16px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              }}>Lagre</button>
+              <button onClick={() => { setAdding(null); setEmail(''); setPassword(''); }} style={{
+                background: t.surface2, color: t.textSec, border: `1px solid ${t.border}`, borderRadius: 8,
+                padding: '10px 16px', fontSize: 14, cursor: 'pointer',
+              }}>Avbryt</button>
+            </div>
+          </div>
+        )}
+
+        {/* Available newspapers to add */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
+            {activeSubs.length > 0 ? 'Legg til flere' : 'Velg avis'}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {PREMIUM_NEWSPAPERS.filter(p => !subs.some(s => s.newspaperId === p.id)).map(paper => (
+              <button key={paper.id} onClick={() => { setAdding(paper.id); setEmail(''); setPassword(''); }} style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
+                background: adding === paper.id ? `${paper.color}10` : t.surface,
+                border: `1px solid ${adding === paper.id ? paper.color + '40' : t.border}`,
+                borderRadius: 12, cursor: 'pointer', textAlign: 'left', width: '100%',
+              }}>
+                <div style={{ width: 36, height: 36, borderRadius: 8, background: paper.color, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                  <span style={{ color: '#fff', fontSize: 14, fontWeight: 800 }}>{paper.name.charAt(0)}</span>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: t.text }}>{paper.name}</div>
+                  <div style={{ fontSize: 11, color: t.textMuted }}>{paper.domain}</div>
+                </div>
+                <span style={{ fontSize: 20, color: t.textMuted }}>+</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Info box */}
+        <div style={{ marginTop: 20, padding: '12px 14px', background: t.surface2, borderRadius: 10, border: `1px solid ${t.border}` }}>
+          <div style={{ fontSize: 12, color: t.textSec, lineHeight: 1.5 }}>
+            <strong style={{ color: t.text }}>Slik fungerer det:</strong> Når du legger til et abonnement, vil Norsk Puls forsøke å hente fullt innhold fra pluss-artikler med din innlogging. Artiklene du har tilgang til vises med et åpent lås-ikon.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Stats Sidebar ───────────────────────────────────────────────────────────
 function StatsSidebar({ t, avatar, onAvatarChange, onClose, mobile }) {
   const { stats, topCategories, topRegions, totalReadingMinutes, todayArticles,
           resetStats, averageWpm, recentWpm, recentSessions, wpmTrend, readingLevel } = useStats();
+  const { subs: premiumSubs } = usePremiumSubs();
+  const [showPremium, setShowPremium] = useState(false);
   const catMax = topCategories[0]?.[1] || 1;
   const regMax = topRegions[0]?.[1] || 1;
   const CAT_LABELS = { innenriks:'Innenriks', utenriks:'Utenriks', sport:'Sport', okonomi:'Økonomi', teknologi:'Teknologi', helse:'Helse', kultur:'Kultur', klima:'Klima', politikk:'Politikk', krig:'Krig' };
@@ -215,9 +375,39 @@ function StatsSidebar({ t, avatar, onAvatarChange, onClose, mobile }) {
         </div>
       )}
 
+      {/* Premium subscriptions */}
+      <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 16, boxShadow: t.cardShadow, marginBottom: mobile ? 12 : 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, letterSpacing: 1, marginBottom: 10, textTransform: 'uppercase' }}>Premium Abonnement</div>
+        {premiumSubs.length > 0 ? (
+          <div style={{ marginBottom: 10 }}>
+            {premiumSubs.map(s => {
+              const paper = PREMIUM_NEWSPAPERS.find(p => p.id === s.newspaperId);
+              if (!paper) return null;
+              return (
+                <div key={s.newspaperId} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: paper.color }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: t.text, flex: 1 }}>{paper.name}</span>
+                  <span style={{ fontSize: 10, color: '#22c55e', fontWeight: 600 }}>Aktiv</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 10 }}>Ingen abonnement lagt til ennå</div>
+        )}
+        <button onClick={() => setShowPremium(true)} style={{
+          width: '100%', background: t.accent, color: '#fff', border: 'none', borderRadius: 8,
+          padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+        }}>
+          {premiumSubs.length > 0 ? 'Administrer abonnement' : 'Legg til abonnement'}
+        </button>
+      </div>
+
       <button onClick={resetStats} style={{ fontSize: 11, color: t.textMuted, background: 'none', border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', width: '100%' }}>
         Nullstill statistikk
       </button>
+
+      {showPremium && <PremiumPanel t={t} mobile={mobile} onClose={() => setShowPremium(false)} />}
     </div>
   );
 
