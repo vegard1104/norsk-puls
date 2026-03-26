@@ -1,313 +1,626 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { AuthProvider, useAuth } from './auth.jsx';
 import LoginPage from './LoginPage.jsx';
 import AdminPanel from './AdminPanel.jsx';
 import { useNews } from './useNews.js';
-import { DEFAULT_SOURCES, CATEGORIES, getNorwegianSources, getInternationalSources } from './sources.js';
+import { DEFAULT_SOURCES, INTERNATIONAL_SOURCES, CATEGORIES, WORLD_REGIONS, CATEGORY_EMOJIS } from './sources.js';
+import { ThemeProvider, useTheme } from './ThemeContext.jsx';
+import { StatsProvider, useStats, getReadingLevel } from './StatsContext.jsx';
 
-// ── Reading history utilities ──────────────────────────────────────────────────
-
-const HISTORY_KEY = 'np_history';
-const MAX_HISTORY = 400;
-
-function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
-  catch { return []; }
-}
-function saveHistory(h) {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(h.slice(0, MAX_HISTORY)));
-}
-function recordRead(article, seconds) {
-  if (!article || seconds < 3) return;
-  const h = loadHistory();
-  h.unshift({
-    articleId: article.id,
-    category: article.category,
-    source: article.source,
-    sourceId: article.sourceId,
-    title: article.title,
-    link: article.link,
-    image: article.image,
-    timestamp: Date.now(),
-    readTimeSeconds: Math.round(seconds),
-  });
-  saveHistory(h.filter((e, i, a) => a.findIndex(x => x.articleId === e.articleId) === i));
-}
-
-function computeStats(history) {
-  const totalRead = history.length;
-  if (!totalRead) return {
-    topCategories: [], topSources: [], totalRead: 0,
-    avgReadTime: 0, score: 0, level: 'Nybegynner', weekCount: 0, streak: 0,
-    nextLevel: 'Leser', nextScore: 50,
-  };
-  const catCounts = {};
-  history.forEach(e => { catCounts[e.category] = (catCounts[e.category] || 0) + 1; });
-  const topCategories = Object.entries(catCounts)
-    .sort((a, b) => b[1] - a[1]).slice(0, 5)
-    .map(([id, count]) => ({
-      id, count,
-      label: CATEGORIES.find(c => c.id === id)?.label || id,
-      pct: Math.round((count / totalRead) * 100),
-    }));
-  const srcCounts = {};
-  history.forEach(e => { srcCounts[e.source] = (srcCounts[e.source] || 0) + 1; });
-  const topSources = Object.entries(srcCounts).sort((a, b) => b[1] - a[1]).slice(0, 4)
-    .map(([name, count]) => ({ name, count }));
-  const times = history.map(e => e.readTimeSeconds).filter(t => t >= 5 && t < 600);
-  const avgReadTime = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
-  const longReads = history.filter(e => e.readTimeSeconds > 60).length;
-  const uniqueCats = new Set(history.map(e => e.category)).size;
-  const uniqueSrcs = new Set(history.map(e => e.sourceId)).size;
-  const score = totalRead * 5 + longReads * 10 + uniqueCats * 20 + uniqueSrcs * 10;
-
-  const LEVELS = [
-    { name: 'Nybegynner', min: 0, next: 50 },
-    { name: 'Leser', min: 50, next: 200 },
-    { name: 'Nyhetsjeger', min: 200, next: 500 },
-    { name: 'Redaktør', min: 500, next: 1000 },
-    { name: 'Sjefredaktør', min: 1000, next: Infinity },
-  ];
-  const lvlObj = LEVELS.slice().reverse().find(l => score >= l.min) || LEVELS[0];
-  const nextLvl = LEVELS[LEVELS.indexOf(lvlObj) + 1];
-  const levelPct = nextLvl ? Math.min(100, Math.round(((score - lvlObj.min) / (nextLvl.min - lvlObj.min)) * 100)) : 100;
-
-  const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
-  const weekCount = history.filter(e => e.timestamp > weekAgo).length;
-  const days = new Set(history.map(e => new Date(e.timestamp).toDateString()));
-  const streak = days.size;
-
-  return { topCategories, topSources, totalRead, avgReadTime, score, level: lvlObj.name,
-    nextLevel: nextLvl?.name || null, levelPct, weekCount, streak };
-}
-
-// ── Category background gradients ─────────────────────────────────────────────
-
-const CATEGORY_BG = {
-  innenriks: 'radial-gradient(ellipse at 15% 50%, rgba(40,60,180,0.18) 0%, transparent 60%)',
-  utenriks:  'radial-gradient(ellipse at 85% 30%, rgba(15,80,160,0.16) 0%, transparent 60%)',
-  sport:     'radial-gradient(ellipse at 50% 80%, rgba(20,150,60,0.16) 0%, transparent 60%)',
-  okonomi:   'radial-gradient(ellipse at 78% 15%, rgba(160,100,10,0.15) 0%, transparent 60%)',
-  teknologi: 'radial-gradient(ellipse at 25% 25%, rgba(90,40,200,0.18) 0%, transparent 60%)',
-  helse:     'radial-gradient(ellipse at 60% 65%, rgba(10,140,140,0.15) 0%, transparent 60%)',
-  kultur:    'radial-gradient(ellipse at 40% 15%, rgba(180,20,100,0.15) 0%, transparent 60%)',
-  klima:     'radial-gradient(ellipse at 15% 75%, rgba(20,140,30,0.17) 0%, transparent 60%)',
-};
-
-// ── Regioner for internasjonal filtrering ─────────────────────────────────────
-
-export const INTL_REGIONS = [
-  {
-    id: 'asia', label: 'Asia', icon: '🌏',
-    keywords: ['china', 'japan', 'korea', 'india', 'taiwan', 'indonesia', 'pakistan',
-               'vietnam', 'thailand', 'singapore', 'bangladesh', 'myanmar', 'cambodia',
-               'hong kong', 'beijing', 'tokyo', 'seoul', 'delhi', 'manila', 'jakarta',
-               'malaysia', 'philippines', 'mongolia', 'tibet', 'xinjiang', 'kashmir'],
-    sourceRegions: ['sør-asia', 'oseania / asia', 'asia'],
-  },
-  {
-    id: 'mideast', label: 'Midtøsten', icon: '🕌',
-    keywords: ['israel', 'palestine', 'iran', 'iraq', 'syria', 'saudi', 'turkey',
-               'jordan', 'lebanon', 'yemen', 'qatar', 'dubai', 'uae', 'bahrain',
-               'kuwait', 'oman', 'gaza', 'west bank', 'tehran', 'damascus', 'baghdad',
-               'hezbollah', 'hamas', 'houthi', 'netanyahu', 'ramallah'],
-    sourceRegions: ['midtøsten', 'midtøsten / afrika'],
-  },
-  {
-    id: 'africa', label: 'Afrika', icon: '🌍',
-    keywords: ['africa', 'nigeria', 'kenya', 'ethiopia', 'ghana', 'tanzania',
-               'south africa', 'egypt', 'morocco', 'algeria', 'sudan', 'congo',
-               'senegal', 'cameroon', 'zimbabwe', 'uganda', 'rwanda', 'nairobi',
-               'cairo', 'lagos', 'dakar', 'mali', 'niger', 'somalia', 'eritrea'],
-    sourceRegions: ['afrika', 'midtøsten / afrika'],
-  },
-  {
-    id: 'north_america', label: 'Nord-Amerika', icon: '🌎',
-    keywords: ['usa', 'united states', 'america', 'canada', 'mexico', 'washington',
-               'white house', 'congress', 'senate', 'trump', 'biden', 'harris',
-               'ottawa', 'toronto', 'new york', 'california', 'texas', 'florida',
-               'pentagon', 'wall street', 'federal reserve', 'cia', 'fbi'],
-    sourceRegions: ['nord-amerika'],
-  },
-  {
-    id: 'south_america', label: 'Sør-Amerika', icon: '🌎',
-    keywords: ['brazil', 'argentina', 'chile', 'colombia', 'peru', 'venezuela',
-               'bolivia', 'uruguay', 'paraguay', 'ecuador', 'brasilia', 'buenos aires',
-               'bogota', 'lima', 'santiago', 'caracas', 'amazon', 'lula', 'milei',
-               'falkland', 'mercosur', 'guyana', 'suriname'],
-    sourceRegions: ['sør-amerika'],
-  },
-  {
-    id: 'europe', label: 'Europa', icon: '🇪🇺',
-    keywords: ['europe', 'european', 'germany', 'france', 'spain', 'italy', 'poland',
-               'ukraine', 'russia', 'britain', 'england', 'berlin', 'paris', 'rome',
-               'madrid', 'brussels', 'london', 'nato', 'eu', 'merkel', 'macron',
-               'scholz', 'zelensky', 'putin', 'kremlin', 'moscow', 'kyiv', 'brexit'],
-    sourceRegions: ['europa', 'europa / global'],
-  },
-  {
-    id: 'oceania', label: 'Oseania', icon: '🦘',
-    keywords: ['australia', 'new zealand', 'pacific', 'papua', 'fiji', 'sydney',
-               'melbourne', 'canberra', 'auckland', 'wellington', 'pacific island',
-               'tonga', 'samoa', 'vanuatu', 'solomon', 'micronesia'],
-    sourceRegions: ['oseania', 'oseania / asia'],
-  },
-];
-
-// Bestem hvilken(e) regioner en artikkel tilhører
-function detectArticleRegions(article) {
-  const text = (article.title + ' ' + (article.description || '')).toLowerCase();
-  const srcRegion = (article.sourceRegion || '').toLowerCase();
-
-  const matched = INTL_REGIONS.filter(r => {
-    // Sjekk kilde-region
-    if (r.sourceRegions.some(sr => srcRegion.includes(sr))) return true;
-    // Sjekk innholdsnøkkelord
-    return r.keywords.some(kw => text.includes(kw));
-  });
-  return matched.map(r => r.id);
-}
-
-// ── Avatar helpers ─────────────────────────────────────────────────────────────
-
-const AVATAR_KEY = 'np_avatar';
-function loadAvatar() { return localStorage.getItem(AVATAR_KEY) || null; }
-function saveAvatar(dataUrl) { localStorage.setItem(AVATAR_KEY, dataUrl); }
-
-// Komponent: viser profilbilde eller initial-bokstav, med klikk for opplasting
-function AvatarCircle({ initial, lvlColor, size = 48, onAvatarChange }) {
-  const [avatar, setAvatar] = useState(() => loadAvatar());
-  const [hovered, setHovered] = useState(false);
-  const fileRef = useRef(null);
-
-  function handleFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const dataUrl = ev.target.result;
-      saveAvatar(dataUrl);
-      setAvatar(dataUrl);
-      onAvatarChange?.();
-    };
-    reader.readAsDataURL(file);
-  }
-
+// ─── WPM Toast ───────────────────────────────────────────────────────────────
+function WpmToast({ result, onDone }) {
+  const { theme: t } = useTheme();
+  const level = getReadingLevel(result.wpm);
+  useEffect(() => {
+    const timer = setTimeout(onDone, 4000);
+    return () => clearTimeout(timer);
+  }, [onDone]);
   return (
-    <div
-      style={{ position: 'relative', width: size, height: size, flexShrink: 0, cursor: 'pointer' }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onClick={e => { e.stopPropagation(); fileRef.current?.click(); }}
-      title="Klikk for å endre profilbilde"
-    >
-      {/* Sirkelen */}
-      <div style={{
-        width: size, height: size, borderRadius: '50%', overflow: 'hidden',
-        border: `${size > 50 ? 3 : 2}px solid ${lvlColor}`,
-        background: `linear-gradient(135deg, ${lvlColor}, #1a1a2e)`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: size * 0.42, fontWeight: 800,
-      }}>
-        {avatar
-          ? <img src={avatar} alt="avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          : initial}
-      </div>
-      {/* Rediger-overlay */}
-      {hovered && (
-        <div style={{
-          position: 'absolute', inset: 0, borderRadius: '50%',
-          background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: size > 50 ? 18 : 13,
-        }}>
-          📷
+    <div style={{
+      position: 'fixed', bottom: 28, right: 28, zIndex: 2000,
+      background: t.surface, border: `1px solid ${t.border}`,
+      borderRadius: 16, padding: '14px 18px', boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+      display: 'flex', flexDirection: 'column', gap: 6, minWidth: 220,
+      animation: 'slideIn 0.3s ease',
+    }}>
+      <div style={{ fontSize: 12, color: t.textMuted }}>Lesing fullført</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 28 }}>{level.icon}</span>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: level.color }}>
+            {result.wpm > 0 ? `${result.wpm} ord/min` : `${result.seconds}s lest`}
+          </div>
+          <div style={{ fontSize: 12, color: t.textSec }}>{level.label} · Scrollet {Math.round(result.scrollDepth * 100)}%</div>
         </div>
-      )}
-      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleFile} />
+      </div>
     </div>
   );
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-function formatTime(s) {
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${s % 60}s`;
+// ─── Stat Bar ────────────────────────────────────────────────────────────────
+function StatBar({ label, value, max, color, t }) {
+  const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div style={{ marginBottom: 9 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: t.textSec, marginBottom: 3 }}>
+        <span>{label}</span><span style={{ fontWeight: 600 }}>{value}</span>
+      </div>
+      <div style={{ height: 5, background: t.surface3, borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 3, transition: 'width 0.5s' }} />
+      </div>
+    </div>
+  );
 }
 
-// ── Main app ───────────────────────────────────────────────────────────────────
+// ─── Mini WPM Sparkline ──────────────────────────────────────────────────────
+function WpmSparkline({ sessions, t }) {
+  if (sessions.length < 2) return null;
+  const max = Math.max(...sessions.map(s => s.wpm), 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 28, marginTop: 6 }}>
+      {sessions.map((s, i) => {
+        const h = Math.max(4, Math.round((s.wpm / max) * 28));
+        const level = getReadingLevel(s.wpm);
+        return (
+          <div key={i} title={`${s.wpm} ord/min`}
+            style={{ flex: 1, height: h, background: level.color, borderRadius: 2, opacity: 0.7 + (i / sessions.length) * 0.3 }} />
+        );
+      })}
+    </div>
+  );
+}
 
+// ─── Stats Sidebar ───────────────────────────────────────────────────────────
+function StatsSidebar({ t, avatar, onAvatarChange }) {
+  const { stats, topCategories, topRegions, totalReadingMinutes, todayArticles, resetStats,
+          averageWpm, recentWpm, recentSessions, wpmTrend, readingLevel } = useStats();
+
+  const catMax = topCategories[0]?.[1] || 1;
+  const regMax = topRegions[0]?.[1] || 1;
+  const CAT_LABELS = { innenriks: 'Innenriks', utenriks: 'Utenriks', sport: 'Sport', okonomi: 'Økonomi', teknologi: 'Teknologi', helse: 'Helse', kultur: 'Kultur', klima: 'Klima', politikk: 'Politikk', krig: 'Krig' };
+  const REG_LABELS = { europa: 'Europa', nord_amerika: 'N-Amerika', asia: 'Asia', midtosten: 'Midtøsten', africa: 'Afrika', latin_amerika: 'L-Amerika', global: 'Globalt' };
+  const COLORS = ['#d4202a', '#3b82f6', '#22c55e', '#f59e0b', '#8b5cf6'];
+  const fileRef = useRef(null);
+
+  function handleAvatarClick() { fileRef.current?.click(); }
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => { onAvatarChange(ev.target.result); };
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <div style={{ width: 220, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Profile card */}
+      <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 16, boxShadow: t.cardShadow, textAlign: 'center' }}>
+        <div style={{ position: 'relative', display: 'inline-block', marginBottom: 10 }}>
+          <div onClick={handleAvatarClick} style={{
+            width: 72, height: 72, borderRadius: '50%', overflow: 'hidden', cursor: 'pointer',
+            background: t.surface3, border: `3px solid ${t.accent}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            position: 'relative',
+          }}>
+            {avatar
+              ? <img src={avatar} alt="Profilbilde" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <span style={{ fontSize: 28 }}>👤</span>}
+            <div style={{
+              position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.4)', opacity: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, borderRadius: '50%',
+              transition: 'opacity 0.2s',
+            }}
+              onMouseEnter={e => e.currentTarget.style.opacity = 1}
+              onMouseLeave={e => e.currentTarget.style.opacity = 0}>
+              📷
+            </div>
+          </div>
+          <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: 'none' }} />
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>Vegard</div>
+        <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 10 }}>Norsk Puls leser</div>
+
+        {/* Reading level badge */}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: t.surface2, border: `1px solid ${readingLevel.color}`, borderRadius: 20, padding: '4px 10px' }}>
+          <span>{readingLevel.icon}</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: readingLevel.color }}>{readingLevel.label}</span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 12 }}>
+          {[
+            { label: '🏆 Poeng', value: (stats.points || 0).toLocaleString('no') },
+            { label: '🔥 Streak', value: `${stats.streak || 0} dager` },
+            { label: '📰 I dag', value: `${todayArticles} art.` },
+            { label: '⏱️ Lesetid', value: `${totalReadingMinutes} min` },
+          ].map(item => (
+            <div key={item.label} style={{ background: t.surface2, borderRadius: 8, padding: '7px 8px', textAlign: 'center' }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: t.text }}>{item.value}</div>
+              <div style={{ fontSize: 10, color: t.textMuted }}>{item.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Reading speed */}
+      <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 16, boxShadow: t.cardShadow }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, letterSpacing: 1, marginBottom: 10, textTransform: 'uppercase' }}>Lesehastighet</div>
+        {averageWpm === 0 ? (
+          <div style={{ fontSize: 12, color: t.textMuted, textAlign: 'center', padding: '8px 0' }}>
+            Les noen artikler for å se statistikk 📖
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 4 }}>
+              <div>
+                <div style={{ fontSize: 26, fontWeight: 900, color: readingLevel.color }}>{recentWpm || averageWpm}</div>
+                <div style={{ fontSize: 11, color: t.textMuted }}>ord/min (snitt)</div>
+              </div>
+              {wpmTrend !== 0 && (
+                <div style={{ fontSize: 13, fontWeight: 700, color: wpmTrend > 0 ? '#22c55e' : '#ef4444', textAlign: 'right' }}>
+                  {wpmTrend > 0 ? '↑' : '↓'} {Math.abs(wpmTrend)}%
+                  <div style={{ fontSize: 10, color: t.textMuted, fontWeight: 400 }}>vs. forrige</div>
+                </div>
+              )}
+            </div>
+            <WpmSparkline sessions={recentSessions} t={t} />
+            <div style={{ fontSize: 11, color: t.textMuted, marginTop: 6 }}>
+              {recentSessions.length} lesesesjoner registrert
+            </div>
+
+            {/* Level progress bar */}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: t.textMuted, marginBottom: 3 }}>
+                <span>{readingLevel.label}</span>
+                <span>Neste nivå: {readingLevel.max} ord/min</span>
+              </div>
+              <div style={{ height: 5, background: t.surface3, borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 3, background: readingLevel.color,
+                  width: `${Math.min(100, ((recentWpm - readingLevel.min) / (readingLevel.max - readingLevel.min)) * 100)}%`,
+                  transition: 'width 0.5s',
+                }} />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Top categories */}
+      {topCategories.length > 0 && (
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 16, boxShadow: t.cardShadow }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, letterSpacing: 1, marginBottom: 12, textTransform: 'uppercase' }}>Dine interesser</div>
+          {topCategories.map(([cat, count], i) => (
+            <StatBar key={cat} label={`${CATEGORY_EMOJIS[cat] || ''} ${CAT_LABELS[cat] || cat}`} value={count} max={catMax} color={COLORS[i % COLORS.length]} t={t} />
+          ))}
+        </div>
+      )}
+
+      {/* Top regions */}
+      {topRegions.length > 0 && (
+        <div style={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 16, padding: 16, boxShadow: t.cardShadow }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, letterSpacing: 1, marginBottom: 12, textTransform: 'uppercase' }}>Verdensregioner</div>
+          {topRegions.map(([reg, count], i) => (
+            <StatBar key={reg} label={REG_LABELS[reg] || reg} value={count} max={regMax} color={COLORS[i % COLORS.length]} t={t} />
+          ))}
+        </div>
+      )}
+
+      <button onClick={resetStats} style={{
+        fontSize: 11, color: t.textMuted, background: 'none',
+        border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer',
+      }}>
+        Nullstill statistikk
+      </button>
+    </div>
+  );
+}
+
+// ─── Article Card ────────────────────────────────────────────────────────────
+function ArticleCard({ article, size = 'small', onClick, t }) {
+  const isHero = size === 'hero';
+  const isMedium = size === 'medium';
+
+  const timeAgo = (() => {
+    const h = Math.floor((Date.now() - article.pubDate) / 3600000);
+    if (h < 1) return 'Nå';
+    if (h < 24) return `${h}t`;
+    return `${Math.floor(h / 24)}d`;
+  })();
+
+  const meta = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: article.sourceColor }}>{article.source}</span>
+      <span style={{ fontSize: 11, color: t.textMuted }}>·</span>
+      <span style={{ fontSize: 11, color: t.textMuted }}>{timeAgo}</span>
+      <span style={{ fontSize: 11, color: t.textMuted }}>·</span>
+      <span style={{ fontSize: 11, color: t.textMuted }}>~{article.readingTime} min</span>
+      {article.isPlus && !isHero && !isMedium && (
+        <span style={{ background: '#d97706', color: '#fff', fontSize: 9, fontWeight: 800, padding: '1px 5px', borderRadius: 3 }}>PLUSS</span>
+      )}
+      {article.isInternational && !isHero && !isMedium && (
+        <span style={{ background: '#2563eb', color: '#fff', fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 3 }}>WORLD</span>
+      )}
+    </div>
+  );
+
+  if (isHero || isMedium) {
+    return (
+      <div onClick={() => onClick(article)} style={{
+        background: t.surface, border: `1px solid ${t.border}`, borderRadius: 14,
+        overflow: 'hidden', cursor: 'pointer', boxShadow: t.cardShadow,
+        display: 'flex', flexDirection: 'column',
+        height: isHero ? 340 : 290,
+        transition: 'transform 0.15s, box-shadow 0.15s',
+      }}
+        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 8px 28px rgba(0,0,0,0.18)'; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = t.cardShadow; }}>
+        {/* Image */}
+        <div style={{ position: 'relative', height: isHero ? 190 : 150, overflow: 'hidden', flexShrink: 0 }}>
+          <img src={article.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} loading="lazy" />
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.55) 0%, transparent 55%)' }} />
+          {article.isPlus && (
+            <div style={{ position: 'absolute', top: 10, right: 10, background: '#d97706', color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4 }}>PLUSS</div>
+          )}
+          {article.isInternational && (
+            <div style={{ position: 'absolute', top: 10, left: 10, background: '#2563eb', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>WORLD</div>
+          )}
+          <div style={{ position: 'absolute', bottom: 10, left: 12, background: article.sourceColor, color: '#fff', fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 4 }}>
+            {article.source}
+          </div>
+        </div>
+        {/* Text */}
+        <div style={{ padding: '12px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {meta}
+          <div style={{ fontSize: isHero ? 17 : 15, fontWeight: 700, color: t.text, lineHeight: 1.3, flex: 1 }}>
+            {article.title}
+          </div>
+          {article.description && (
+            <div style={{ fontSize: 13, color: t.textSec, lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+              {article.description}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Small card with thumbnail
+  return (
+    <div onClick={() => onClick(article)} style={{
+      background: t.surface, border: `1px solid ${t.border}`, borderRadius: 12,
+      overflow: 'hidden', cursor: 'pointer', boxShadow: t.cardShadow,
+      display: 'flex', flexDirection: 'row', alignItems: 'stretch',
+      transition: 'transform 0.12s, box-shadow 0.12s',
+    }}
+      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 20px rgba(0,0,0,0.14)'; }}
+      onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = t.cardShadow; }}>
+      {/* Thumbnail */}
+      <div style={{ width: 90, flexShrink: 0, position: 'relative', overflow: 'hidden' }}>
+        <img src={article.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} loading="lazy" />
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: 3,
+          background: article.sourceColor,
+        }} />
+      </div>
+      {/* Text */}
+      <div style={{ padding: '10px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+        {meta}
+        <div style={{ fontSize: 14, fontWeight: 700, color: t.text, lineHeight: 1.3, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+          {article.title}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Fetch full article content via proxy ────────────────────────────────────
+const PROXY_URL = import.meta.env.VITE_PROXY_URL;
+
+async function fetchFullContent(link) {
+  if (!link || link === '#' || !PROXY_URL) return null;
+  try {
+    const url = `${PROXY_URL}/?url=${encodeURIComponent(link)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(7000) });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    // Remove noise elements
+    ['script','style','nav','header','footer','aside','figure','figcaption',
+     'iframe','form','button','.ad','[class*="banner"]','[class*="promo"]',
+     '[class*="related"]','[class*="recommended"]'].forEach(sel => {
+      try { doc.querySelectorAll(sel).forEach(el => el.remove()); } catch {}
+    });
+
+    // Try to find the main article container
+    const contentSelectors = [
+      'article', '[class*="article-body"]', '[class*="article-content"]',
+      '[class*="story-body"]', '[class*="post-content"]', '[class*="entry-content"]',
+      '[itemprop="articleBody"]', 'main', '.content', '#content',
+    ];
+    let container = null;
+    for (const sel of contentSelectors) {
+      try {
+        container = doc.querySelector(sel);
+        if (container) break;
+      } catch {}
+    }
+    if (!container) container = doc.body;
+
+    // Extract paragraphs with real content
+    const paragraphs = Array.from(container.querySelectorAll('p, h2, h3, blockquote'))
+      .map(el => ({ tag: el.tagName.toLowerCase(), text: el.textContent.trim() }))
+      .filter(({ text }) => text.length > 40);
+
+    if (paragraphs.length < 2) return null;
+    return paragraphs;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Article Panel ───────────────────────────────────────────────────────────
+function ArticlePanel({ article, onClose, t }) {
+  const { trackArticleClose } = useStats();
+  const scrollRef = useRef(null);
+  const maxScrollRef = useRef(0);
+  const [fullContent, setFullContent] = useState(null);   // null = loading, [] = failed
+  const [fetchStatus, setFetchStatus] = useState('loading'); // loading | ok | blocked | error
+
+  const visibleWords = useMemo(() => {
+    if (!article) return 0;
+    const baseWords = (article.title + ' ' + (article.description || '')).split(/\s+/).length;
+    const extraWords = fullContent ? fullContent.reduce((s, p) => s + p.text.split(/\s+/).length, 0) : 0;
+    return baseWords + extraWords;
+  }, [article, fullContent]);
+
+  useEffect(() => {
+    if (!article) return;
+    setFullContent(null);
+    setFetchStatus('loading');
+    fetchFullContent(article.link).then(content => {
+      if (content && content.length > 0) {
+        setFullContent(content);
+        setFetchStatus('ok');
+      } else if (article.link === '#') {
+        setFetchStatus('mock');
+      } else {
+        setFetchStatus('blocked');
+        setFullContent([]);
+      }
+    });
+  }, [article?.id]);
+
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el) return;
+    const scrollable = el.scrollHeight - el.clientHeight;
+    if (scrollable <= 0) { maxScrollRef.current = 1; return; }
+    const pct = el.scrollTop / scrollable;
+    if (pct > maxScrollRef.current) maxScrollRef.current = pct;
+  }
+
+  function handleClose() {
+    const result = trackArticleClose(maxScrollRef.current, visibleWords);
+    onClose(result);
+  }
+
+  if (!article) return null;
+
+  const statusInfo = {
+    loading: { icon: '⏳', text: 'Henter artikkelinnhold...', color: t.textMuted },
+    ok:      { icon: '✅', text: 'Full artikkel lastet', color: '#22c55e' },
+    blocked: { icon: '🔒', text: 'Avisen blokkerer direkte visning', color: '#f59e0b' },
+    mock:    { icon: '📋', text: 'Eksempelartikkel (ingen proxy-URL)', color: t.textMuted },
+    error:   { icon: '⚠️', text: 'Kunne ikke laste innhold', color: '#ef4444' },
+  }[fetchStatus] || {};
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex' }}>
+      <div onClick={handleClose} style={{ flex: 1, background: 'rgba(0,0,0,0.55)', cursor: 'pointer', backdropFilter: 'blur(2px)' }} />
+      <div ref={scrollRef} onScroll={handleScroll} style={{
+        width: '46%', minWidth: 380, maxWidth: 680,
+        background: t.surface, overflowY: 'auto',
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '-4px 0 40px rgba(0,0,0,0.3)',
+      }}>
+        {/* Panel header */}
+        <div style={{ position: 'sticky', top: 0, background: t.surface, borderBottom: `1px solid ${t.border}`, padding: '12px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: article.sourceColor }} />
+            <span style={{ fontSize: 14, fontWeight: 700, color: article.sourceColor }}>{article.source}</span>
+            <span style={{ fontSize: 12, color: t.textMuted }}>· ~{article.readingTime} min</span>
+            <span style={{ fontSize: 11, color: statusInfo.color }} title={statusInfo.text}>{statusInfo.icon}</span>
+          </div>
+          <button onClick={handleClose} style={{
+            background: t.surface2, border: 'none', color: t.textSec,
+            width: 32, height: 32, borderRadius: '50%', cursor: 'pointer', fontSize: 18,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>×</button>
+        </div>
+
+        {/* Image */}
+        <div style={{ position: 'relative' }}>
+          <img src={article.image} alt="" style={{ width: '100%', height: 220, objectFit: 'cover', display: 'block' }} />
+          {article.isPlus && (
+            <div style={{ position: 'absolute', top: 14, right: 14, background: '#d97706', color: '#fff', fontSize: 11, fontWeight: 800, padding: '3px 9px', borderRadius: 5 }}>PLUSS</div>
+          )}
+          {article.isInternational && article.region && (
+            <div style={{ position: 'absolute', bottom: 14, left: 14, background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 11, padding: '3px 9px', borderRadius: 5 }}>
+              {WORLD_REGIONS.find(r => r.id === article.region)?.label || '🌐 Globalt'}
+            </div>
+          )}
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: '24px 24px 16px' }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
+            {CATEGORIES.find(c => c.id === article.category) && (
+              <span style={{ background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 20, padding: '3px 10px', fontSize: 11, color: t.textSec }}>
+                {CATEGORY_EMOJIS[article.category]} {CATEGORIES.find(c => c.id === article.category)?.label}
+              </span>
+            )}
+            <span style={{ background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 20, padding: '3px 10px', fontSize: 11, color: t.textSec }}>
+              ~{article.readingTime} min
+            </span>
+            <span style={{ background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 20, padding: '3px 10px', fontSize: 11, color: t.textMuted }}>
+              {new Date(article.pubDate).toLocaleDateString('no', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+            </span>
+          </div>
+
+          <h2 style={{ color: t.text, fontSize: 22, lineHeight: 1.3, marginBottom: 16, fontWeight: 800 }}>
+            {article.title}
+          </h2>
+
+          {/* Ingress / description — always shown */}
+          <p style={{ color: t.text, fontSize: 16, lineHeight: 1.75, fontWeight: 500, marginBottom: 20, borderLeft: `3px solid ${article.sourceColor}`, paddingLeft: 14 }}>
+            {article.description}
+          </p>
+
+          {/* Loading state */}
+          {fetchStatus === 'loading' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: t.textMuted, fontSize: 13, padding: '12px 0', marginBottom: 16 }}>
+              <span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span>
+              Henter resten av artikkelen...
+            </div>
+          )}
+
+          {/* Full content paragraphs */}
+          {fullContent && fullContent.length > 0 && (
+            <div style={{ marginBottom: 24 }}>
+              {fullContent.map((p, i) => {
+                if (p.tag === 'h2' || p.tag === 'h3') {
+                  return <h3 key={i} style={{ color: t.text, fontSize: 17, fontWeight: 700, marginBottom: 10, marginTop: 24, lineHeight: 1.3 }}>{p.text}</h3>;
+                }
+                if (p.tag === 'blockquote') {
+                  return <blockquote key={i} style={{ borderLeft: `3px solid ${t.border}`, paddingLeft: 14, color: t.textSec, fontStyle: 'italic', margin: '16px 0', fontSize: 15, lineHeight: 1.7 }}>{p.text}</blockquote>;
+                }
+                return <p key={i} style={{ color: t.textSec, fontSize: 15, lineHeight: 1.75, marginBottom: 16 }}>{p.text}</p>;
+              })}
+            </div>
+          )}
+
+          {/* Blocked / failed notice + link */}
+          {(fetchStatus === 'blocked' || fetchStatus === 'error') && (
+            <div style={{ background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 10, padding: '14px 16px', marginBottom: 20 }}>
+              <div style={{ fontSize: 13, color: t.textSec, marginBottom: 4 }}>
+                🔒 <strong>{article.source}</strong> tillater ikke visning av hele artikkelen her.
+              </div>
+              <div style={{ fontSize: 12, color: t.textMuted }}>
+                Noen aviser krever at du besøker nettsiden direkte.
+              </div>
+            </div>
+          )}
+
+          <a href={article.link} target="_blank" rel="noopener noreferrer"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: t.accent, color: '#fff', padding: '11px 22px', borderRadius: 10, textDecoration: 'none', fontWeight: 700, fontSize: 14 }}>
+            {fetchStatus === 'ok' ? 'Se original artikkel →' : 'Les hos ' + article.source + ' →'}
+          </a>
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '0 24px 32px', marginTop: 'auto' }}>
+          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 16 }}>
+            <p style={{ color: t.textMuted, fontSize: 12, lineHeight: 1.5 }}>
+              📊 Vi tracker lesetid og scrolldybde for å gi deg bedre anbefalinger.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── News Feed Grid ──────────────────────────────────────────────────────────
+function NewsFeed({ articles, loading, t, onToast }) {
+  const [selectedArticle, setSelectedArticle] = useState(null);
+  const { trackArticleOpen } = useStats();
+
+  function handleOpen(article) {
+    trackArticleOpen(article);
+    setSelectedArticle(article);
+  }
+
+  function handleClose(wpmResult) {
+    setSelectedArticle(null);
+    if (wpmResult && wpmResult.seconds >= 5) {
+      onToast(wpmResult);
+    }
+  }
+
+  if (loading) return (
+    <div style={{ textAlign: 'center', padding: 80, color: t.textSec }}>
+      <div style={{ fontSize: 36, marginBottom: 12, animation: 'spin 1s linear infinite' }}>⏳</div>
+      <div>Henter nyheter...</div>
+    </div>
+  );
+
+  if (articles.length === 0) return (
+    <div style={{ textAlign: 'center', padding: 80, color: t.textSec }}>
+      <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
+      <div>Ingen nyheter funnet</div>
+    </div>
+  );
+
+  const hero = articles[0];
+  const mediums = articles.slice(1, 3);
+  const smalls = articles.slice(3);
+
+  return (
+    <>
+      {selectedArticle && (
+        <ArticlePanel article={selectedArticle} onClose={handleClose} t={t} />
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {hero && <ArticleCard article={hero} size="hero" onClick={handleOpen} t={t} />}
+        {mediums.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+            {mediums.map(a => <ArticleCard key={a.id} article={a} size="medium" onClick={handleOpen} t={t} />)}
+          </div>
+        )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {smalls.map(a => <ArticleCard key={a.id} article={a} size="small" onClick={handleOpen} t={t} />)}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Main App ────────────────────────────────────────────────────────────────
 function NewsApp() {
   const { user, logout } = useAuth();
+  const { theme: t, isDark, toggleTheme } = useTheme();
+  const { stats, categoryPrefs, regionPrefs } = useStats();
+
   const [activeTab, setActiveTab] = useState('news');
   const [activeCategory, setActiveCategory] = useState(null);
+  const [activeRegion, setActiveRegion] = useState('all');
+  const [activeIntlSources, setActiveIntlSources] = useState([]);
   const [interests, setInterests] = useState(() => {
-    const saved = localStorage.getItem('np_interests');
-    return saved ? JSON.parse(saved) : [];
+    const s = localStorage.getItem('np_interests');
+    return s ? JSON.parse(s) : [];
   });
   const [sources, setSources] = useState(() => {
-    const saved = localStorage.getItem('np_sources');
-    if (!saved) return DEFAULT_SOURCES;
-    const parsed = JSON.parse(saved);
-    const URL_FIXES = {
-      'tv2': 'https://www.tv2.no/rss/nyheter',
-      'dn':  'https://services.dn.no/api/feed/rss/',
-    };
-    let changed = false;
-    let updated = parsed
-      .filter(s => s.id !== 'dagbladet')
-      .map(s => {
-        if (URL_FIXES[s.id] && s.rssUrl !== URL_FIXES[s.id]) {
-          changed = true;
-          return { ...s, rssUrl: URL_FIXES[s.id] };
-        }
-        return s;
-      });
-    if (parsed.find(s => s.id === 'dagbladet')) changed = true;
-    if (!updated.find(s => s.id === 'nettavisen')) {
-      updated.push({ id: 'nettavisen', name: 'Nettavisen', rssUrl: 'https://www.nettavisen.no/rss', color: '#0097d6', enabled: true });
-      changed = true;
-    }
-    if (!updated.find(s => s.id === 'dagsavisen')) {
-      updated.push({ id: 'dagsavisen', name: 'Dagsavisen', rssUrl: 'https://www.dagsavisen.no/rss/', color: '#c0392b', lang: 'no', enabled: true });
-      changed = true;
-    }
-    // Legg til internasjonale kilder hvis de mangler
-    const intlToAdd = [
-      { id: 'bbc',       name: 'BBC World',       rssUrl: 'http://feeds.bbci.co.uk/news/world/rss.xml',                      color: '#bb1919', lang: 'en', region: 'Global',            enabled: true },
-      { id: 'aljazeera', name: 'Al Jazeera',       rssUrl: 'https://www.aljazeera.com/xml/rss/all.xml',                       color: '#e8871e', lang: 'en', region: 'Midtøsten / Afrika', enabled: true },
-      { id: 'guardian',  name: 'The Guardian',     rssUrl: 'https://www.theguardian.com/world/rss',                           color: '#052962', lang: 'en', region: 'Global',            enabled: true },
-      { id: 'reuters',   name: 'Reuters',          rssUrl: 'https://feeds.reuters.com/reuters/worldNews',                     color: '#ff7700', lang: 'en', region: 'Global',            enabled: true },
-      { id: 'dw',        name: 'Deutsche Welle',   rssUrl: 'https://rss.dw.com/xml/rss-en-world',                             color: '#0068b5', lang: 'en', region: 'Europa / Global',   enabled: true },
-      { id: 'abc_au',    name: 'ABC Australia',    rssUrl: 'https://www.abc.net.au/news/feed/51120/rss.xml',                   color: '#00a650', lang: 'en', region: 'Oseania / Asia',    enabled: true },
-      { id: 'toi',       name: 'Times of India',   rssUrl: 'https://timesofindia.indiatimes.com/rssfeedstopstories.cms',      color: '#e63a11', lang: 'en', region: 'Sør-Asia',          enabled: true },
-      { id: 'allafrica', name: 'AllAfrica',        rssUrl: 'https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf',  color: '#006400', lang: 'en', region: 'Afrika',            enabled: true },
-      { id: 'mee',       name: 'Middle East Eye',  rssUrl: 'https://www.middleeasteye.net/rss',                               color: '#1a8c4e', lang: 'en', region: 'Midtøsten',        enabled: true },
-      { id: 'mercopress',name: 'Mercopress',       rssUrl: 'https://en.mercopress.com/rss/news',                              color: '#2e7d32', lang: 'en', region: 'Sør-Amerika',       enabled: true },
-    ];
-    for (const src of intlToAdd) {
-      if (!updated.find(s => s.id === src.id)) { updated.push(src); changed = true; }
-    }
-    // Sørg for at eksisterende norske kilder har lang-feltet
-    updated = updated.map(s => {
-      if (!s.lang) { changed = true; return { ...s, lang: 'no' }; }
-      return s;
-    });
-    if (changed) localStorage.setItem('np_sources', JSON.stringify(updated));
-    return updated;
+    const s = localStorage.getItem('np_sources');
+    return s ? JSON.parse(s) : DEFAULT_SOURCES;
   });
   const [showAdmin, setShowAdmin] = useState(false);
-  const [selectedArticle, setSelectedArticle] = useState(null);
-  const [showProfile, setShowProfile] = useState(false);
-  const [activeRegion, setActiveRegion] = useState(null); // for internasjonal fane
-  const [history, setHistory] = useState(() => loadHistory());
+  const [showStats, setShowStats] = useState(true);
+  const [toastResult, setToastResult] = useState(null);
+  const [avatar, setAvatar] = useState(() => localStorage.getItem('np_avatar') || '');
 
-  const { articles, loading, lastUpdated, refresh } = useNews(sources);
+  const allSources = useMemo(() => [...sources, ...INTERNATIONAL_SOURCES], [sources]);
+  const { articles, loading, lastUpdated, refresh } = useNews(allSources);
+
+  const norskArticles = useMemo(() => articles.filter(a => !a.isInternational), [articles]);
+  const intlArticles  = useMemo(() => articles.filter(a => a.isInternational), [articles]);
 
   function saveSources(newSources) {
     setSources(newSources);
     localStorage.setItem('np_sources', JSON.stringify(newSources));
   }
+
   function toggleInterest(id) {
     setInterests(prev => {
       const updated = prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id];
@@ -315,954 +628,254 @@ function NewsApp() {
       return updated;
     });
   }
-  function handleRead(article, seconds) {
-    recordRead(article, seconds);
-    setHistory(loadHistory());
+
+  function handleAvatarChange(dataUrl) {
+    setAvatar(dataUrl);
+    localStorage.setItem('np_avatar', dataUrl);
   }
 
-  const stats = computeStats(history);
-
-  // Splitt artikler etter språk
-  const norwegianArticles = articles.filter(a => !a.sourceLang || a.sourceLang === 'no');
-  const intlArticles      = articles.filter(a => a.sourceLang === 'en');
-
-  // Category counts for trending bar (basert på aktiv tab)
-  const activeArticles = activeTab === 'international' ? intlArticles : norwegianArticles;
-  const categoryCount = {};
-  activeArticles.forEach(a => { categoryCount[a.category] = (categoryCount[a.category] || 0) + 1; });
-  const topTrendingCat = Object.entries(categoryCount).sort((a, b) => b[1] - a[1])[0]?.[0];
-  const bgGradient = CATEGORY_BG[topTrendingCat] || '';
-
-  const trending = Object.entries(categoryCount)
-    .sort((a, b) => b[1] - a[1]).slice(0, 6)
-    .map(([id, count]) => ({ id, count, label: CATEGORIES.find(c => c.id === id)?.label || id }));
-
-  // Filtrer norske artikler
-  let filtered = norwegianArticles;
-  if (activeCategory) filtered = filtered.filter(a => a.category === activeCategory);
-  const myArticles = interests.length > 0 ? filtered.filter(a => interests.includes(a.category)) : [];
-
-  // Filtrer internasjonale artikler (kategori + region)
-  let filteredIntl = intlArticles;
-  if (activeCategory) filteredIntl = filteredIntl.filter(a => a.category === activeCategory);
-  if (activeRegion) {
-    filteredIntl = filteredIntl.filter(a => detectArticleRegions(a).includes(activeRegion));
+  function showToast(result) {
+    setToastResult(result);
   }
 
-  // Tell artikler per region for å vise badges
-  const regionCounts = INTL_REGIONS.reduce((acc, r) => {
-    acc[r.id] = intlArticles.filter(a => detectArticleRegions(a).includes(r.id)).length;
-    return acc;
-  }, {});
+  // Trending
+  const trending = useMemo(() => {
+    const count = {};
+    norskArticles.forEach(a => { count[a.category] = (count[a.category] || 0) + 1; });
+    return Object.entries(count).sort((a, b) => b[1] - a[1]).slice(0, 6)
+      .map(([id, cnt]) => ({ id, count: cnt, label: CATEGORIES.find(c => c.id === id)?.label || id }));
+  }, [norskArticles]);
 
-  // Recommendations: prefer user's top read categories, then interests
-  const recCats = stats.topCategories.length > 0
-    ? stats.topCategories.slice(0, 3).map(c => c.id)
-    : interests.length > 0 ? interests.slice(0, 3) : null;
-  const recommendations = recCats
-    ? norwegianArticles.filter(a => recCats.includes(a.category)).slice(0, 9)
-    : norwegianArticles.filter((_, i) => i % 3 === 0).slice(0, 9);
+  // Filtered + personalized Norwegian
+  const filteredNorsk = useMemo(() => {
+    let list = activeCategory ? norskArticles.filter(a => a.category === activeCategory) : norskArticles;
+    if (Object.keys(categoryPrefs).length > 0) {
+      list = [...list].sort((a, b) => {
+        const tA = (Date.now() - a.pubDate) / 3600000;
+        const tB = (Date.now() - b.pubDate) / 3600000;
+        return ((categoryPrefs[b.category] || 0) * 30 - tB * 0.4) - ((categoryPrefs[a.category] || 0) * 30 - tA * 0.4);
+      });
+    }
+    return list;
+  }, [norskArticles, activeCategory, categoryPrefs]);
+
+  // Filtered + personalized international
+  const filteredIntl = useMemo(() => {
+    let list = intlArticles;
+    if (activeRegion !== 'all') list = list.filter(a => a.region === activeRegion);
+    if (activeIntlSources.length > 0) list = list.filter(a => activeIntlSources.includes(a.sourceId));
+    if (Object.keys(regionPrefs).length > 0) {
+      list = [...list].sort((a, b) => {
+        const tA = (Date.now() - a.pubDate) / 3600000;
+        const tB = (Date.now() - b.pubDate) / 3600000;
+        return ((regionPrefs[b.region] || 0) * 30 - tB * 0.4) - ((regionPrefs[a.region] || 0) * 30 - tA * 0.4);
+      });
+    }
+    return list;
+  }, [intlArticles, activeRegion, activeIntlSources, regionPrefs]);
+
+  const myArticles = useMemo(() => (
+    interests.length === 0 ? [] : filteredNorsk.filter(a => interests.includes(a.category))
+  ), [filteredNorsk, interests]);
 
   if (!user) return <LoginPage />;
 
+  const tabs = [
+    { id: 'news',      label: '🇳🇴 Norske nyheter' },
+    { id: 'world',     label: '🌍 Verden' },
+    { id: 'interests', label: '⭐ Mine interesser', badge: interests.length },
+  ];
+
   return (
-    <div style={{
-      minHeight: '100vh',
-      background: '#0a0a0f',
-      backgroundImage: bgGradient,
-      backgroundAttachment: 'fixed',
-      fontFamily: 'system-ui, -apple-system, sans-serif',
-      color: '#fff',
-      transition: 'background-image 2s ease',
-    }}>
-      {/* Header */}
-      <header style={{ background: 'rgba(13,13,18,0.95)', backdropFilter: 'blur(12px)', borderBottom: '1px solid #1e1e2e', position: 'sticky', top: 0, zIndex: 100 }}>
-        <div style={{ maxWidth: 1440, margin: '0 auto', padding: '0 20px', display: 'flex', alignItems: 'center', height: 56, gap: 20 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ color: '#d4202a' }}>●</span> NORSK PULS
+    <div style={{ minHeight: '100vh', background: t.bg, fontFamily: 'system-ui, -apple-system, sans-serif', color: t.text, transition: 'background 0.3s' }}>
+      <style>{`@keyframes slideIn { from { transform: translateY(16px); opacity: 0; } to { transform: none; opacity: 1; } }`}</style>
+
+      {showAdmin && <AdminPanel sources={sources} onSave={saveSources} onClose={() => setShowAdmin(false)} />}
+      {toastResult && <WpmToast result={toastResult} onDone={() => setToastResult(null)} />}
+
+      {/* ── Header ── */}
+      <header style={{ background: t.headerBg, borderBottom: `1px solid ${t.border}`, position: 'sticky', top: 0, zIndex: 100, boxShadow: isDark ? 'none' : '0 1px 8px rgba(0,0,0,0.07)' }}>
+        <div style={{ maxWidth: 1300, margin: '0 auto', padding: '0 20px', display: 'flex', alignItems: 'center', height: 56, gap: 14 }}>
+
+          {/* Logo */}
+          <div style={{ fontSize: 17, fontWeight: 900, color: t.text, display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <span style={{ color: t.accent }}>●</span> NORSK PULS
           </div>
-          <nav style={{ display: 'flex', gap: 4, flex: 1 }}>
-            {[
-              { id: 'news',          label: 'Nyheter' },
-              { id: 'international', label: '🌍 Internasjonalt' },
-              { id: 'interests',     label: 'Mine interesser' },
-            ].map(tab => (
-              <button key={tab.id} onClick={() => { setActiveTab(tab.id); setActiveCategory(null); setActiveRegion(null); }} style={{
-                background: activeTab === tab.id ? '#1e1e2e' : 'transparent',
-                border: 'none', color: activeTab === tab.id ? '#fff' : '#666',
-                fontWeight: activeTab === tab.id ? 700 : 400, fontSize: 14, padding: '6px 14px',
-                borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap',
+
+          {/* Tabs */}
+          <nav style={{ display: 'flex', gap: 2, flex: 1 }}>
+            {tabs.map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+                background: activeTab === tab.id ? t.surface2 : 'transparent',
+                border: activeTab === tab.id ? `1px solid ${t.border}` : '1px solid transparent',
+                color: activeTab === tab.id ? t.text : t.textSec,
+                fontWeight: activeTab === tab.id ? 700 : 400,
+                fontSize: 13, padding: '5px 12px', borderRadius: 8, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', gap: 5, transition: 'all 0.15s',
               }}>
                 {tab.label}
-                {tab.id === 'interests' && interests.length > 0 && (
-                  <span style={{ marginLeft: 6, background: '#d4202a', color: '#fff', borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>{interests.length}</span>
-                )}
-                {tab.id === 'international' && intlArticles.length > 0 && (
-                  <span style={{ marginLeft: 6, background: '#1a3a5c', color: '#7bc8ff', borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>{intlArticles.length}</span>
+                {tab.badge > 0 && (
+                  <span style={{ background: t.accent, color: '#fff', borderRadius: 10, padding: '0px 5px', fontSize: 10 }}>{tab.badge}</span>
                 )}
               </button>
             ))}
           </nav>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+
+          {/* Right controls */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+            <div style={{ background: t.surface2, border: `1px solid ${t.border}`, borderRadius: 20, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#d97706', display: 'flex', alignItems: 'center', gap: 4 }}>
+              🏆 {(stats.points || 0).toLocaleString('no')}
+            </div>
             {lastUpdated && (
-              <span style={{ color: '#444', fontSize: 12 }}>
-                Oppdatert {lastUpdated.toLocaleTimeString('no', { hour: '2-digit', minute: '2-digit' })}
+              <span style={{ color: t.textMuted, fontSize: 11 }}>
+                {lastUpdated.toLocaleTimeString('no', { hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
-            <button onClick={refresh} style={{ background: '#1e1e2e', border: '1px solid #333', color: '#ccc', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 13 }}>↺</button>
-            <button onClick={() => setShowAdmin(true)} style={{ background: '#1e1e2e', border: '1px solid #333', color: '#ccc', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 13 }}>Admin</button>
-            <button onClick={logout} style={{ background: 'none', border: '1px solid #333', color: '#666', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', fontSize: 13 }}>Logg ut</button>
+            {[
+              { icon: '↺', action: refresh, title: 'Oppdater' },
+              { icon: isDark ? '☀️' : '🌙', action: toggleTheme, title: 'Bytt tema' },
+            ].map(btn => (
+              <button key={btn.icon} onClick={btn.action} title={btn.title} style={{
+                background: t.surface2, border: `1px solid ${t.border}`, color: t.textSec,
+                borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 14,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>{btn.icon}</button>
+            ))}
+            <button onClick={() => setShowStats(s => !s)} title="Statistikk" style={{
+              background: showStats ? t.accent : t.surface2,
+              border: `1px solid ${showStats ? t.accent : t.border}`,
+              color: showStats ? '#fff' : t.textSec,
+              borderRadius: 8, width: 32, height: 32, cursor: 'pointer', fontSize: 14,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>📊</button>
+            <button onClick={() => setShowAdmin(true)} style={{ background: t.surface2, border: `1px solid ${t.border}`, color: t.textSec, borderRadius: 8, padding: '0 10px', height: 32, cursor: 'pointer', fontSize: 13 }}>Admin</button>
+
+            {/* Avatar in header */}
+            <div style={{ width: 32, height: 32, borderRadius: '50%', overflow: 'hidden', border: `2px solid ${t.accent}`, cursor: 'pointer', flexShrink: 0, background: t.surface3, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => setShowStats(true)}>
+              {avatar
+                ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <span style={{ fontSize: 14 }}>👤</span>}
+            </div>
+
+            <button onClick={logout} style={{ background: 'none', border: `1px solid ${t.border}`, color: t.textMuted, borderRadius: 8, padding: '0 10px', height: 32, cursor: 'pointer', fontSize: 13 }}>Logg ut</button>
           </div>
         </div>
       </header>
 
-      {/* Trending bar */}
-      {(activeTab === 'news' || activeTab === 'international') && trending.length > 0 && (
-        <div style={{ background: 'rgba(10,10,16,0.9)', backdropFilter: 'blur(8px)', borderBottom: '1px solid #1a1a2a' }}>
-          <div style={{ maxWidth: 1440, margin: '0 auto', padding: '10px 20px', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ color: '#d4202a', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>🔥 TRENDING</span>
+      {/* ── Trending bar ── */}
+      {activeTab === 'news' && trending.length > 0 && (
+        <div style={{ background: t.surface, borderBottom: `1px solid ${t.border}` }}>
+          <div style={{ maxWidth: 1300, margin: '0 auto', padding: '8px 20px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ color: t.accent, fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>🔥 TRENDING</span>
             {trending.map(({ id, label, count }) => (
               <button key={id} onClick={() => setActiveCategory(activeCategory === id ? null : id)} style={{
-                background: activeCategory === id ? '#d4202a' : '#1a1a24',
-                color: activeCategory === id ? '#fff' : '#ccc',
-                border: 'none', borderRadius: 20, padding: '4px 12px', cursor: 'pointer',
-                fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap',
+                background: activeCategory === id ? t.accent : t.surface2,
+                border: `1px solid ${activeCategory === id ? t.accent : t.border}`,
+                color: activeCategory === id ? '#fff' : t.textSec,
+                borderRadius: 20, padding: '3px 10px', cursor: 'pointer', fontSize: 12,
+                display: 'flex', alignItems: 'center', gap: 5,
               }}>
-                {label} <span style={{ opacity: 0.7 }}>({count})</span>
+                {CATEGORY_EMOJIS[id]} {label} <span style={{ fontSize: 10, opacity: 0.7 }}>{count}</span>
               </button>
             ))}
             {activeCategory && (
-              <button onClick={() => setActiveCategory(null)} style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 12 }}>✕ Fjern filter</button>
+              <button onClick={() => setActiveCategory(null)} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 12 }}>× Fjern</button>
             )}
           </div>
         </div>
       )}
 
-      {/* 3-column layout */}
-      <div style={{
-        maxWidth: 1440, margin: '0 auto', padding: '20px',
-        display: 'grid',
-        gridTemplateColumns: '220px 1fr 290px',
-        gap: '20px',
-        alignItems: 'start',
-      }}>
-
-        {/* ── Left: Profile sidebar ── */}
-        <ProfileSidebar
-          user={user}
-          stats={stats}
-          history={history}
-          onOpenProfile={() => setShowProfile(true)}
-        />
-
-        {/* ── Center: Main content ── */}
-        <main>
-          {activeTab === 'news' && (
-            <>
-              {loading ? (
-                <div style={{ textAlign: 'center', padding: 60, color: '#666' }}>
-                  <div style={{ fontSize: 32, marginBottom: 12 }}>📡</div>
-                  Henter nyheter...
-                </div>
-              ) : (
-                <>
-                  {interests.length > 0 && myArticles.length > 0 && (
-                    <section style={{ marginBottom: 40 }}>
-                      <h2 style={{ color: '#d4202a', fontSize: 14, fontWeight: 700, letterSpacing: 1, marginBottom: 16 }}>⭐ MINE NYHETER</h2>
-                      <ArticleGrid articles={myArticles.slice(0, 6)} onSelect={setSelectedArticle} />
-                    </section>
-                  )}
-                  <section>
-                    <h2 style={{ color: '#ccc', fontSize: 14, fontWeight: 700, letterSpacing: 1, marginBottom: 16 }}>
-                      {activeCategory ? `KATEGORI: ${CATEGORIES.find(c => c.id === activeCategory)?.label?.toUpperCase()}` : 'SISTE NYTT'}
-                    </h2>
-                    <ArticleGrid articles={filtered} onSelect={setSelectedArticle} />
-                  </section>
-                </>
+      {/* ── World filters ── */}
+      {activeTab === 'world' && (
+        <div style={{ background: t.surface, borderBottom: `1px solid ${t.border}` }}>
+          <div style={{ maxWidth: 1300, margin: '0 auto', padding: '10px 20px' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', minWidth: 52 }}>Region:</span>
+              {WORLD_REGIONS.map(r => (
+                <button key={r.id} onClick={() => setActiveRegion(r.id)} style={{
+                  background: activeRegion === r.id ? '#2563eb' : t.surface2,
+                  border: `1px solid ${activeRegion === r.id ? '#2563eb' : t.border}`,
+                  color: activeRegion === r.id ? '#fff' : t.textSec,
+                  borderRadius: 20, padding: '3px 10px', cursor: 'pointer', fontSize: 12,
+                }}>{r.label}</button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase', minWidth: 52 }}>Avis:</span>
+              {INTERNATIONAL_SOURCES.map(src => (
+                <button key={src.id}
+                  onClick={() => setActiveIntlSources(prev => prev.includes(src.id) ? prev.filter(s => s !== src.id) : [...prev, src.id])}
+                  style={{
+                    background: activeIntlSources.includes(src.id) ? src.color : t.surface2,
+                    border: `1px solid ${activeIntlSources.includes(src.id) ? src.color : t.border}`,
+                    color: activeIntlSources.includes(src.id) ? '#fff' : t.textSec,
+                    borderRadius: 20, padding: '3px 10px', cursor: 'pointer', fontSize: 12,
+                  }}>{src.name}</button>
+              ))}
+              {activeIntlSources.length > 0 && (
+                <button onClick={() => setActiveIntlSources([])} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 12 }}>× Alle</button>
               )}
-            </>
-          )}
+            </div>
+          </div>
+        </div>
+      )}
 
-          {activeTab === 'international' && (
+      {/* ── Main layout ── */}
+      <main style={{ maxWidth: 1300, margin: '0 auto', padding: '20px', display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+        {showStats && <StatsSidebar t={t} avatar={avatar} onAvatarChange={handleAvatarChange} />}
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {activeTab === 'news' && <NewsFeed articles={filteredNorsk} loading={loading} t={t} onToast={showToast} />}
+
+          {activeTab === 'world' && (
             <>
-              {loading ? (
-                <div style={{ textAlign: 'center', padding: 60, color: '#666' }}>
-                  <div style={{ fontSize: 32, marginBottom: 12 }}>🌍</div>
-                  Henter internasjonale nyheter...
-                </div>
-              ) : (
-                <>
-                  {/* ── Regionfilter ── */}
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={{ fontSize: 11, color: '#555', fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>FILTRER ETTER VERDENSDEL</div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {/* "Vis alle"-knapp */}
-                      <button
-                        onClick={() => setActiveRegion(null)}
-                        style={{
-                          background: !activeRegion ? '#1a3a5c' : '#13131a',
-                          border: `1px solid ${!activeRegion ? '#3a7bc8' : '#2a2a3a'}`,
-                          color: !activeRegion ? '#7bc8ff' : '#666',
-                          borderRadius: 20, padding: '6px 14px', cursor: 'pointer',
-                          fontSize: 13, fontWeight: !activeRegion ? 700 : 400,
-                          display: 'flex', alignItems: 'center', gap: 5,
-                        }}
-                      >
-                        🌐 Alle
-                        <span style={{ fontSize: 11, opacity: 0.7 }}>({intlArticles.length})</span>
-                      </button>
-
-                      {INTL_REGIONS.map(r => {
-                        const count = regionCounts[r.id] || 0;
-                        if (!count) return null;
-                        const isActive = activeRegion === r.id;
-                        return (
-                          <button
-                            key={r.id}
-                            onClick={() => setActiveRegion(isActive ? null : r.id)}
-                            style={{
-                              background: isActive ? '#1a3a5c' : '#13131a',
-                              border: `1px solid ${isActive ? '#3a7bc8' : '#2a2a3a'}`,
-                              color: isActive ? '#7bc8ff' : '#aaa',
-                              borderRadius: 20, padding: '6px 14px', cursor: 'pointer',
-                              fontSize: 13, fontWeight: isActive ? 700 : 400,
-                              display: 'flex', alignItems: 'center', gap: 5,
-                              transition: 'all 0.15s',
-                            }}
-                          >
-                            {r.icon} {r.label}
-                            <span style={{ fontSize: 11, opacity: 0.7 }}>({count})</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Kildeinfo-rad */}
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
-                    {getInternationalSources(sources).filter(s => s.enabled).map(s => {
-                      const count = (activeRegion
-                        ? filteredIntl
-                        : intlArticles
-                      ).filter(a => a.sourceId === s.id).length;
-                      if (!count) return null;
-                      return (
-                        <div key={s.id} style={{
-                          background: '#0d0d14', border: `1px solid ${s.color}33`,
-                          borderRadius: 16, padding: '3px 10px', fontSize: 11,
-                          display: 'flex', alignItems: 'center', gap: 5, color: '#666',
-                        }}>
-                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.color, display: 'inline-block' }} />
-                          {s.name}
-                          <span style={{ color: '#444' }}>({count})</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  <section>
-                    <h2 style={{ color: '#7bc8ff', fontSize: 14, fontWeight: 700, letterSpacing: 1, marginBottom: 16 }}>
-                      {activeRegion
-                        ? `${INTL_REGIONS.find(r => r.id === activeRegion)?.icon} ${INTL_REGIONS.find(r => r.id === activeRegion)?.label?.toUpperCase()}`
-                        : activeCategory
-                          ? `KATEGORI: ${CATEGORIES.find(c => c.id === activeCategory)?.label?.toUpperCase()}`
-                          : 'INTERNASJONALE NYHETER'}
-                      {filteredIntl.length > 0 && (
-                        <span style={{ color: '#555', fontWeight: 400, marginLeft: 8, fontSize: 12 }}>
-                          {filteredIntl.length} artikler · duplikater fjernet
-                        </span>
-                      )}
-                    </h2>
-                    {filteredIntl.length === 0 ? (
-                      <div style={{ color: '#555', textAlign: 'center', padding: '40px 0', fontSize: 14 }}>
-                        Ingen artikler funnet for dette området akkurat nå.
-                      </div>
-                    ) : (
-                      <ArticleGrid articles={filteredIntl} onSelect={setSelectedArticle} />
-                    )}
-                  </section>
-                </>
-              )}
+              <div style={{ fontSize: 13, color: t.textSec, marginBottom: 14 }}>
+                {filteredIntl.length} internasjonale nyheter
+                {activeRegion !== 'all' && ` · ${WORLD_REGIONS.find(r => r.id === activeRegion)?.label}`}
+              </div>
+              <NewsFeed articles={filteredIntl} loading={loading} t={t} onToast={showToast} />
             </>
           )}
 
           {activeTab === 'interests' && (
             <div>
-              <h2 style={{ color: '#fff', fontSize: 18, marginBottom: 8 }}>Mine interesser</h2>
-              <p style={{ color: '#666', marginBottom: 24, fontSize: 14 }}>Velg kategorier du vil følge — de vises øverst i nyhetsstrømmen.</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginBottom: 40 }}>
+              <h2 style={{ color: t.text, fontSize: 18, marginBottom: 8 }}>Mine interesser</h2>
+              <p style={{ color: t.textSec, fontSize: 13, marginBottom: 14 }}>Velg kategorier du vil følge:</p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 24 }}>
                 {CATEGORIES.map(cat => (
                   <button key={cat.id} onClick={() => toggleInterest(cat.id)} style={{
-                    background: interests.includes(cat.id) ? '#1a3a1a' : '#13131a',
-                    border: `2px solid ${interests.includes(cat.id) ? '#4caf50' : '#2a2a3a'}`,
-                    borderRadius: 12, padding: '16px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s',
+                    background: interests.includes(cat.id) ? t.accent : t.surface2,
+                    border: `1px solid ${interests.includes(cat.id) ? t.accent : t.border}`,
+                    color: interests.includes(cat.id) ? '#fff' : t.textSec,
+                    borderRadius: 20, padding: '6px 14px', cursor: 'pointer', fontSize: 13,
+                    fontWeight: interests.includes(cat.id) ? 700 : 400,
                   }}>
-                    <div style={{ fontSize: 24, marginBottom: 8 }}>
-                      {['🇳🇴','🌍','⚽','💹','💻','🏥','🎭','🌱'][CATEGORIES.indexOf(cat)]}
-                    </div>
-                    <div style={{ color: interests.includes(cat.id) ? '#4caf50' : '#fff', fontWeight: 600, fontSize: 14 }}>{cat.label}</div>
-                    {interests.includes(cat.id) && <div style={{ color: '#4caf50', fontSize: 11, marginTop: 4 }}>✓ Valgt</div>}
+                    {CATEGORY_EMOJIS[cat.id]} {cat.label}
                   </button>
                 ))}
               </div>
-              <h2 style={{ color: '#fff', fontSize: 18, marginBottom: 8 }}>Nyhetskilder</h2>
-              <p style={{ color: '#666', marginBottom: 16, fontSize: 14 }}>Skru av/på enkeltkilder her.</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 10 }}>
-                {sources.map(s => (
-                  <div key={s.id} style={{ background: '#13131a', border: `1px solid ${s.enabled ? '#2a2a3a' : '#1a1a1a'}`, borderRadius: 10, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: s.enabled ? s.color : '#333' }} />
-                    <span style={{ color: s.enabled ? '#fff' : '#555', fontWeight: 600, flex: 1 }}>{s.name}</span>
-                    <button onClick={() => {
-                      const updated = sources.map(src => src.id === s.id ? { ...src, enabled: !src.enabled } : src);
-                      saveSources(updated);
-                    }} style={{
-                      background: s.enabled ? '#1a3a1a' : '#2a2a2a', color: s.enabled ? '#4caf50' : '#666',
-                      border: 'none', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontSize: 11,
-                    }}>
-                      {s.enabled ? 'PÅ' : 'AV'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </main>
-
-        {/* ── Right: Recommendations ── */}
-        <RecommendationsPanel
-          articles={recommendations}
-          stats={stats}
-          onSelect={setSelectedArticle}
-          loading={loading}
-        />
-      </div>
-
-      {showAdmin && <AdminPanel sources={sources} onSave={saveSources} onClose={() => setShowAdmin(false)} />}
-      {selectedArticle && <ArticlePanel article={selectedArticle} onClose={() => setSelectedArticle(null)} onRead={handleRead} />}
-      {showProfile && <ProfileModal user={user} stats={stats} history={history} onClose={() => setShowProfile(false)} />}
-    </div>
-  );
-}
-
-// ── Profile sidebar (left) ─────────────────────────────────────────────────────
-
-const LEVEL_COLORS = {
-  'Nybegynner':   '#6b7280',
-  'Leser':        '#3b82f6',
-  'Nyhetsjeger':  '#8b5cf6',
-  'Redaktør':     '#f59e0b',
-  'Sjefredaktør': '#ef4444',
-};
-const CAT_ICONS = { innenriks:'🇳🇴', utenriks:'🌍', sport:'⚽', okonomi:'💹', teknologi:'💻', helse:'🏥', kultur:'🎭', klima:'🌱' };
-
-function ProfileSidebar({ user, stats, history, onOpenProfile }) {
-  const initial = (user?.username || user?.email || 'U')[0].toUpperCase();
-  const lvlColor = LEVEL_COLORS[stats.level] || '#6b7280';
-  const todayCount = history.filter(e => new Date(e.timestamp).toDateString() === new Date().toDateString()).length;
-
-  return (
-    <div style={{ position: 'sticky', top: 80 }}>
-      {/* Profile card */}
-      <div
-        onClick={onOpenProfile}
-        style={{
-          background: '#13131a', border: '1px solid #1e1e2e', borderRadius: 16,
-          padding: '20px', cursor: 'pointer', transition: 'border-color 0.2s',
-          marginBottom: 12,
-        }}
-        onMouseEnter={e => e.currentTarget.style.borderColor = '#333'}
-        onMouseLeave={e => e.currentTarget.style.borderColor = '#1e1e2e'}
-      >
-        {/* Avatar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          <AvatarCircle initial={initial} lvlColor={lvlColor} size={48} />
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>
-              {user?.username || user?.email?.split('@')[0] || 'Leser'}
-            </div>
-            <div style={{
-              fontSize: 11, fontWeight: 700, color: lvlColor,
-              background: `${lvlColor}22`, borderRadius: 8, padding: '2px 8px', display: 'inline-block', marginTop: 2,
-            }}>
-              {stats.level}
-            </div>
-          </div>
-        </div>
-
-        {/* Level progress */}
-        {stats.nextLevel && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#666', marginBottom: 4 }}>
-              <span>Mot {stats.nextLevel}</span>
-              <span>{stats.levelPct}%</span>
-            </div>
-            <div style={{ background: '#1e1e2e', borderRadius: 4, height: 5, overflow: 'hidden' }}>
-              <div style={{ width: `${stats.levelPct}%`, height: '100%', background: `linear-gradient(90deg, ${lvlColor}, ${lvlColor}aa)`, borderRadius: 4, transition: 'width 0.5s ease' }} />
-            </div>
-          </div>
-        )}
-
-        {/* Mini stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
-          {[
-            { label: 'Artikler', value: stats.totalRead },
-            { label: 'I dag', value: todayCount },
-            { label: 'Snitt lesetid', value: stats.avgReadTime ? formatTime(stats.avgReadTime) : '–' },
-            { label: 'Denne uken', value: stats.weekCount },
-          ].map(s => (
-            <div key={s.label} style={{ background: '#0d0d14', borderRadius: 8, padding: '8px 10px' }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{s.value}</div>
-              <div style={{ fontSize: 10, color: '#555', marginTop: 1 }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Top categories */}
-        {stats.topCategories.length > 0 && (
-          <div>
-            <div style={{ fontSize: 11, color: '#555', marginBottom: 6 }}>FAVORITTSJANGERE</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-              {stats.topCategories.slice(0, 3).map(c => (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: 13 }}>{CAT_ICONS[c.id] || '📰'}</span>
-                  <div style={{ flex: 1, background: '#0d0d14', borderRadius: 4, height: 6, overflow: 'hidden' }}>
-                    <div style={{ width: `${c.pct}%`, height: '100%', background: '#d4202a44', borderRadius: 4 }} />
-                  </div>
-                  <span style={{ fontSize: 11, color: '#666', width: 30, textAlign: 'right' }}>{c.pct}%</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {stats.totalRead === 0 && (
-          <p style={{ color: '#555', fontSize: 12, textAlign: 'center', margin: 0 }}>
-            Les artikler for å bygge din leserprofil
-          </p>
-        )}
-
-        <div style={{ marginTop: 12, textAlign: 'center', fontSize: 11, color: '#d4202a' }}>
-          Se full statistikk →
-        </div>
-      </div>
-
-      {/* Score display */}
-      <div style={{ background: '#13131a', border: '1px solid #1e1e2e', borderRadius: 12, padding: '12px 16px', textAlign: 'center' }}>
-        <div style={{ fontSize: 11, color: '#555', marginBottom: 4 }}>LESERSCORE</div>
-        <div style={{ fontSize: 32, fontWeight: 800, color: lvlColor, lineHeight: 1 }}>{stats.score}</div>
-        <div style={{ fontSize: 11, color: '#444', marginTop: 4 }}>poeng</div>
-      </div>
-    </div>
-  );
-}
-
-// ── Recommendations panel (right) ─────────────────────────────────────────────
-
-function RecommendationsPanel({ articles, stats, onSelect, loading }) {
-  if (loading) return (
-    <div style={{ position: 'sticky', top: 80 }}>
-      <div style={{ background: '#13131a', border: '1px solid #1e1e2e', borderRadius: 16, padding: 20 }}>
-        <div style={{ color: '#555', fontSize: 13, textAlign: 'center', padding: '30px 0' }}>Henter forslag...</div>
-      </div>
-    </div>
-  );
-
-  const hasHistory = stats.topCategories.length > 0;
-  const subtitle = hasHistory
-    ? `Basert på din interesse for ${stats.topCategories[0]?.label}`
-    : 'Populære artikler akkurat nå';
-
-  return (
-    <div style={{ position: 'sticky', top: 80 }}>
-      <div style={{ background: '#13131a', border: '1px solid #1e1e2e', borderRadius: 16, overflow: 'hidden' }}>
-        {/* Header */}
-        <div style={{ padding: '16px 16px 12px', borderBottom: '1px solid #1a1a2a' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#fff', marginBottom: 3 }}>
-            ✨ Dagens forslag
-          </div>
-          <div style={{ fontSize: 11, color: '#555' }}>{subtitle}</div>
-        </div>
-
-        {/* Articles */}
-        <div style={{ padding: '8px 0' }}>
-          {articles.length === 0 && (
-            <p style={{ color: '#555', fontSize: 13, textAlign: 'center', padding: '20px 16px' }}>
-              Ingen forslag ennå. Les noen artikler for personlige anbefalinger.
-            </p>
-          )}
-          {articles.map((a, i) => (
-            <RecommendationCard key={a.id} article={a} onSelect={onSelect} index={i} />
-          ))}
-        </div>
-      </div>
-
-      {/* Kategori-fordeling mini */}
-      {hasHistory && (
-        <div style={{ background: '#13131a', border: '1px solid #1e1e2e', borderRadius: 12, padding: '14px 16px', marginTop: 12 }}>
-          <div style={{ fontSize: 11, color: '#555', marginBottom: 10 }}>DINE KATEGORIER</div>
-          {stats.topCategories.map(c => (
-            <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
-              <span style={{ fontSize: 14, width: 18 }}>{CAT_ICONS[c.id] || '📰'}</span>
-              <span style={{ fontSize: 12, color: '#ccc', flex: 1 }}>{c.label}</span>
-              <div style={{ width: 60, background: '#0d0d14', borderRadius: 4, height: 5 }}>
-                <div style={{ width: `${c.pct}%`, height: '100%', background: '#d4202a', borderRadius: 4 }} />
-              </div>
-              <span style={{ fontSize: 11, color: '#555', width: 24, textAlign: 'right' }}>{c.count}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RecommendationCard({ article: a, onSelect, index }) {
-  const [hovered, setHovered] = useState(false);
-  return (
-    <div
-      onClick={() => onSelect(a)}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        display: 'flex', gap: 10, padding: '10px 14px', cursor: 'pointer',
-        background: hovered ? '#1a1a24' : 'transparent',
-        borderBottom: index < 8 ? '1px solid #12121a' : 'none',
-        transition: 'background 0.15s',
-      }}
-    >
-      {/* Thumbnail */}
-      <div style={{ width: 60, height: 50, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: '#1a1a24' }}>
-        <img src={a.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={e => e.target.style.display = 'none'} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', gap: 5, marginBottom: 3, alignItems: 'center' }}>
-          <SourceBadge source={a.source} color={a.sourceColor} />
-          {a.readerCount && <PopularityBadge score={a.trendScore} count={a.readerCount} />}
-        </div>
-        <p style={{
-          color: '#ccc', fontSize: 12, fontWeight: 600, margin: 0, lineHeight: 1.3,
-          overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-        }}>
-          {a.title}
-        </p>
-        <TimeStamp date={a.pubDate} />
-      </div>
-    </div>
-  );
-}
-
-// ── Article grid ──────────────────────────────────────────────────────────────
-
-function ArticleGrid({ articles, onSelect }) {
-  if (articles.length === 0) return <div style={{ color: '#555', padding: 40, textAlign: 'center' }}>Ingen artikler å vise.</div>;
-  const hero = articles[0];
-  const medium = articles.slice(1, 5);
-  const small = articles.slice(5);
-  return (
-    <>
-      {/* Hero */}
-      <div onClick={() => onSelect(hero)} style={{
-        position: 'relative', borderRadius: 16, overflow: 'hidden', marginBottom: 16,
-        height: 400, cursor: 'pointer', background: '#1a1a24',
-      }}>
-        <img src={hero.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.6 }} onError={e => e.target.style.display = 'none'} />
-        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.95) 40%, transparent)' }} />
-        {hero.readerCount && (
-          <div style={{ position: 'absolute', top: 14, right: 14 }}>
-            <PopularityBadge score={hero.trendScore} count={hero.readerCount} large />
-          </div>
-        )}
-        <div style={{ position: 'absolute', bottom: 0, padding: 24 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-            <SourceBadge source={hero.source} color={hero.sourceColor} />
-            {hero.isPlus && <PlusBadge />}
-          </div>
-          <h2 style={{ color: '#fff', fontSize: 26, fontWeight: 700, margin: '0 0 8px', lineHeight: 1.3 }}>{hero.title}</h2>
-          <p style={{ color: '#aaa', fontSize: 14, margin: '0 0 6px' }}>{hero.description}</p>
-          <TimeStamp date={hero.pubDate} />
-        </div>
-      </div>
-
-      {/* Medium cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 12 }}>
-        {medium.map(a => <ArticleCard key={a.id} article={a} onSelect={onSelect} size="medium" />)}
-      </div>
-
-      {/* Small cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-        {small.map(a => <ArticleCard key={a.id} article={a} onSelect={onSelect} size="small" />)}
-      </div>
-    </>
-  );
-}
-
-function ArticleCard({ article: a, onSelect, size }) {
-  const imgHeight = size === 'medium' ? 140 : 100;
-  const showDesc = size === 'medium' && a.description && a.description.length > 20;
-  return (
-    <div onClick={() => onSelect(a)} style={{
-      borderRadius: 12, overflow: 'hidden', cursor: 'pointer',
-      background: '#13131a', border: '1px solid #1e1e2e',
-      transition: 'transform 0.2s, border-color 0.2s',
-      display: 'flex', flexDirection: 'column',
-    }}
-      onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.borderColor = '#333'; }}
-      onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = '#1e1e2e'; }}
-    >
-      <div style={{ position: 'relative', height: imgHeight, flexShrink: 0, background: '#1a1a24' }}>
-        <img src={a.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.85 }} onError={e => e.target.style.display = 'none'} />
-        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(13,13,20,0.85) 0%, transparent 55%)' }} />
-        {a.readerCount && (
-          <div style={{ position: 'absolute', top: 8, right: 8 }}>
-            <PopularityBadge score={a.trendScore} count={a.readerCount} />
-          </div>
-        )}
-      </div>
-      <div style={{ padding: '10px 12px', flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-          <SourceBadge source={a.source} color={a.sourceColor} />
-          {a.isPlus && <PlusBadge />}
-        </div>
-        <p style={{ color: '#fff', fontSize: size === 'medium' ? 14 : 13, fontWeight: 600, margin: 0, lineHeight: 1.35 }}>
-          {a.title.length > 80 ? a.title.slice(0, 77) + '...' : a.title}
-        </p>
-        {showDesc && (
-          <p style={{
-            color: '#777', fontSize: 12, margin: 0, lineHeight: 1.45,
-            overflow: 'hidden', display: '-webkit-box',
-            WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-          }}>
-            {a.description}
-          </p>
-        )}
-        <TimeStamp date={a.pubDate} />
-      </div>
-    </div>
-  );
-}
-
-// ── Article panel ─────────────────────────────────────────────────────────────
-
-function ArticlePanel({ article, onClose, onRead }) {
-  const [content, setContent] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  const openedAt = useRef(Date.now());
-  const PROXY_URL = import.meta.env.VITE_PROXY_URL;
-
-  // Track read time on unmount
-  useEffect(() => {
-    return () => {
-      const seconds = (Date.now() - openedAt.current) / 1000;
-      onRead?.(article, seconds);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!article.link || article.link === '#' || !PROXY_URL) {
-      setLoading(false); setError(true); return;
-    }
-    setLoading(true); setError(false);
-    fetch(`${PROXY_URL}/?url=${encodeURIComponent(article.link)}`)
-      .then(r => r.text())
-      .then(html => {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        ['script','style','nav','header','footer','aside','.ad','.ads',
-         '.advertisement','[class*="cookie"]','[class*="paywall"]',
-         '[class*="subscribe"]','[id*="cookie"]','[id*="paywall"]',
-         'figure > figcaption'].forEach(sel => {
-          doc.querySelectorAll(sel).forEach(el => el.remove());
-        });
-        const selectors = [
-          // TV2
-          '.articlebody', '[class*="articlebody"]', '.bodytext',
-          // NRK
-          '[class*="article-body"]', '[class*="lp_articlebody"]',
-          // Generiske
-          '[class*="articleBody"]', '[class*="article__body"]',
-          '[class*="story-body"]', '[class*="content-body"]',
-          '[itemprop="articleBody"]', 'article',
-          '.entry-content', '#article-content',
-          // Siste utvei
-          'main',
-        ];
-        let mainEl = null;
-        for (const sel of selectors) {
-          const candidate = doc.querySelector(sel);
-          if (candidate && candidate.textContent.trim().length > 200) {
-            mainEl = candidate;
-            break;
-          }
-        }
-        // Hent p/h2/h3/blockquote, men filtrer ut navigasjons-tekst og kortklipp
-        const text = mainEl
-          ? Array.from(mainEl.querySelectorAll('p, h2, h3, blockquote'))
-              .map(el => ({ tag: el.tagName.toLowerCase(), text: el.textContent.trim() }))
-              .filter(el => el.text.length > 25 && el.text.length < 2000)
-          : [];
-        setContent(text.length > 0 ? text : null);
-        setLoading(false);
-      })
-      .catch(() => { setLoading(false); setError(true); });
-  }, [article.link]);
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 200, display: 'flex' }} onClick={onClose}>
-      <div style={{ width: 700, marginLeft: 'auto', height: '100vh', background: '#13131a', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid #2a2a3a', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-          <a href={article.link} target="_blank" rel="noreferrer" style={{ background: '#d4202a', color: '#fff', textDecoration: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 13, fontWeight: 600 }}>
-            Les på {article.source} ↗
-          </a>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#999', fontSize: 22, cursor: 'pointer' }}>✕</button>
-        </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-              <SourceBadge source={article.source} color={article.sourceColor} />
-              {article.isPlus && <PlusBadge />}
-            </div>
-            <h1 style={{ color: '#fff', fontSize: 24, fontWeight: 700, margin: '0 0 12px', lineHeight: 1.3 }}>{article.title}</h1>
-            {article.readerCount && (
-              <div style={{ marginBottom: 12 }}>
-                <PopularityBadge score={article.trendScore} count={article.readerCount} large />
-              </div>
-            )}
-            {article.description && (
-              <p style={{ color: '#aaa', fontSize: 15, margin: '0 0 16px', lineHeight: 1.6, borderLeft: '3px solid #d4202a', paddingLeft: 14 }}>
-                {article.description}
-              </p>
-            )}
-            {article.image && (
-              <img src={article.image} alt="" style={{ width: '100%', borderRadius: 10, marginBottom: 8, maxHeight: 300, objectFit: 'cover' }} />
-            )}
-            <TimeStamp date={article.pubDate} />
-          </div>
-          <div style={{ borderTop: '1px solid #2a2a3a', paddingTop: 24 }}>
-            {loading && (
-              <div style={{ textAlign: 'center', padding: 40, color: '#666' }}>
-                <div style={{ fontSize: 28, marginBottom: 10 }}>📡</div>
-                Henter artikkel...
-              </div>
-            )}
-            {!loading && content && content.map((el, i) => {
-              if (el.tag === 'h2' || el.tag === 'h3')
-                return <h3 key={i} style={{ color: '#fff', fontSize: 18, fontWeight: 700, margin: '24px 0 8px' }}>{el.text}</h3>;
-              if (el.tag === 'blockquote')
-                return <blockquote key={i} style={{ color: '#aaa', borderLeft: '3px solid #d4202a', paddingLeft: 16, margin: '16px 0', fontStyle: 'italic' }}>{el.text}</blockquote>;
-              return <p key={i} style={{ color: '#ccc', fontSize: 15, lineHeight: 1.8, margin: '0 0 16px' }}>{el.text}</p>;
-            })}
-            {!loading && (error || !content) && (
-              <div style={{ textAlign: 'center', padding: 40 }}>
-                <div style={{ fontSize: 42, marginBottom: 16 }}>🔒</div>
-                <h3 style={{ color: '#fff', marginBottom: 8 }}>Artikkelen er ikke tilgjengelig her</h3>
-                <p style={{ color: '#666', marginBottom: 24, fontSize: 14 }}>
-                  {article.isPlus ? 'Dette er en plusartikkel — du må lese den på avisens nettside.' : 'Innholdet kunne ikke hentes. Åpne artikkelen direkte.'}
-                </p>
-                <a href={article.link} target="_blank" rel="noreferrer" style={{ background: '#d4202a', color: '#fff', textDecoration: 'none', borderRadius: 8, padding: '12px 24px', fontSize: 14, fontWeight: 600 }}>
-                  Les på {article.source} ↗
-                </a>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Profile modal ─────────────────────────────────────────────────────────────
-
-function ProfileModal({ user, stats, history, onClose }) {
-  const lvlColor = LEVEL_COLORS[stats.level] || '#6b7280';
-  const initial = (user?.username || user?.email || 'U')[0].toUpperCase();
-  const recent = history.slice(0, 10);
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-      <div style={{ width: 600, maxHeight: '88vh', background: '#13131a', borderRadius: 20, overflow: 'hidden', display: 'flex', flexDirection: 'column', border: '1px solid #2a2a3a' }} onClick={e => e.stopPropagation()}>
-
-        {/* Header */}
-        <div style={{ background: `linear-gradient(135deg, #1a1a2e, ${lvlColor}22)`, padding: '24px 28px', borderBottom: '1px solid #2a2a3a', flexShrink: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-              <AvatarCircle initial={initial} lvlColor={lvlColor} size={64} />
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 18, color: '#fff' }}>
-                  {user?.username || user?.email?.split('@')[0] || 'Leser'}
-                </div>
-                <div style={{ fontSize: 13, color: lvlColor, fontWeight: 600, marginTop: 2 }}>{stats.level}</div>
-                <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>{stats.totalRead} artikler lest totalt</div>
-              </div>
-            </div>
-            <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#666', fontSize: 22, cursor: 'pointer' }}>✕</button>
-          </div>
-
-          {/* Level bar */}
-          {stats.nextLevel && (
-            <div style={{ marginTop: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666', marginBottom: 6 }}>
-                <span>Score: <strong style={{ color: lvlColor }}>{stats.score}</strong></span>
-                <span>Neste nivå: {stats.nextLevel} ({stats.levelPct}%)</span>
-              </div>
-              <div style={{ background: '#1e1e2e', borderRadius: 6, height: 8, overflow: 'hidden' }}>
-                <div style={{ width: `${stats.levelPct}%`, height: '100%', background: `linear-gradient(90deg, ${lvlColor}, ${lvlColor}88)`, borderRadius: 6, transition: 'width 0.6s ease' }} />
-              </div>
+              {interests.length === 0
+                ? <div style={{ textAlign: 'center', padding: 40, color: t.textSec }}>Velg minst én kategori ovenfor for å se nyheter her.</div>
+                : <NewsFeed articles={myArticles} loading={loading} t={t} onToast={showToast} />
+              }
             </div>
           )}
         </div>
-
-        {/* Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '24px 28px' }}>
-
-          {/* Quick stats */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 24 }}>
-            {[
-              { label: 'Totalt lest', value: stats.totalRead, icon: '📚' },
-              { label: 'Denne uken', value: stats.weekCount, icon: '📅' },
-              { label: 'Snitt lesetid', value: stats.avgReadTime ? formatTime(stats.avgReadTime) : '–', icon: '⏱' },
-              { label: 'Lesedager', value: stats.streak, icon: '🔥' },
-            ].map(s => (
-              <div key={s.label} style={{ background: '#0d0d14', borderRadius: 12, padding: '14px 12px', textAlign: 'center' }}>
-                <div style={{ fontSize: 22, marginBottom: 4 }}>{s.icon}</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: '#fff' }}>{s.value}</div>
-                <div style={{ fontSize: 11, color: '#555' }}>{s.label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Category breakdown */}
-          {stats.topCategories.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <h3 style={{ color: '#fff', fontSize: 14, fontWeight: 700, marginBottom: 14 }}>📊 Leservaner per kategori</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {stats.topCategories.map(c => (
-                  <div key={c.id}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, color: '#ccc', display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span>{CAT_ICONS[c.id] || '📰'}</span> {c.label}
-                      </span>
-                      <span style={{ fontSize: 12, color: '#666' }}>{c.count} artikler ({c.pct}%)</span>
-                    </div>
-                    <div style={{ background: '#1e1e2e', borderRadius: 6, height: 8, overflow: 'hidden' }}>
-                      <div style={{ width: `${c.pct}%`, height: '100%', background: 'linear-gradient(90deg, #d4202a, #ff6b35)', borderRadius: 6 }} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Top sources */}
-          {stats.topSources.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <h3 style={{ color: '#fff', fontSize: 14, fontWeight: 700, marginBottom: 14 }}>📰 Favorittkildene dine</h3>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {stats.topSources.map((s, i) => (
-                  <div key={s.name} style={{
-                    background: i === 0 ? '#d4202a22' : '#1a1a24',
-                    border: `1px solid ${i === 0 ? '#d4202a55' : '#2a2a3a'}`,
-                    borderRadius: 10, padding: '10px 16px', textAlign: 'center',
-                  }}>
-                    <div style={{ fontWeight: 700, color: '#fff', fontSize: 14 }}>{s.name}</div>
-                    <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>{s.count} artikler</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Recent reads */}
-          {recent.length > 0 && (
-            <div>
-              <h3 style={{ color: '#fff', fontSize: 14, fontWeight: 700, marginBottom: 14 }}>🕐 Nylig lest</h3>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {recent.map(e => (
-                  <div key={e.articleId} style={{ display: 'flex', gap: 10, background: '#0d0d14', borderRadius: 10, padding: '10px 12px', alignItems: 'center' }}>
-                    <div style={{ width: 40, height: 36, borderRadius: 6, overflow: 'hidden', background: '#1a1a24', flexShrink: 0 }}>
-                      {e.image && <img src={e.image} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} onError={ev => ev.target.style.display='none'} />}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{
-                        color: '#ccc', fontSize: 12, fontWeight: 600, margin: 0, lineHeight: 1.3,
-                        overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
-                      }}>{e.title}</p>
-                      <span style={{ fontSize: 11, color: '#555' }}>
-                        {e.source} · {e.readTimeSeconds > 5 ? formatTime(e.readTimeSeconds) + ' lest' : 'åpnet'}
-                        {' · '}{new Date(e.timestamp).toLocaleDateString('no', { day: 'numeric', month: 'short' })}
-                      </span>
-                    </div>
-                    <span style={{ fontSize: 11, background: '#1a1a24', borderRadius: 6, padding: '2px 7px', color: '#666', flexShrink: 0 }}>
-                      {CAT_ICONS[e.category] || '📰'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {stats.totalRead === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px 20px', color: '#555' }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>📖</div>
-              <p style={{ fontSize: 14 }}>Du har ikke lest noen artikler ennå.<br />Start å lese for å bygge din leserprofil!</p>
-            </div>
-          )}
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
 
-// ── Small components ───────────────────────────────────────────────────────────
-
-function SourceBadge({ source, color }) {
-  return (
-    <span style={{ background: color, color: '#fff', fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4 }}>
-      {source}
-    </span>
-  );
-}
-
-function PlusBadge() {
-  return (
-    <span style={{ background: '#c9a227', color: '#000', fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 4, marginLeft: 4 }}>
-      PLUSS
-    </span>
-  );
-}
-
-function PopularityBadge({ score, count, large }) {
-  if (!count) return null;
-  const formatted = count >= 1000 ? (count / 1000).toFixed(1).replace('.', ',') + 'k' : count;
-  const hot = score >= 65;
-  const icon = hot ? '🔥' : '👁';
-  const bg = hot ? 'rgba(255,80,20,0.82)' : 'rgba(30,30,46,0.82)';
-  const textColor = hot ? '#fff' : '#aaa';
-  const sz = large ? 13 : 11;
-  return (
-    <span style={{
-      background: bg, color: textColor, fontSize: sz, fontWeight: 700,
-      padding: large ? '4px 10px' : '3px 7px', borderRadius: 20,
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      backdropFilter: 'blur(4px)', whiteSpace: 'nowrap',
-      border: hot ? '1px solid rgba(255,100,30,0.5)' : '1px solid rgba(255,255,255,0.08)',
-    }}>
-      {icon} {formatted}
-    </span>
-  );
-}
-
-function TimeStamp({ date }) {
-  if (!date) return null;
-  const diff = Math.floor((Date.now() - date) / 60000);
-  const label = diff < 1 ? 'Nå' : diff < 60 ? `${diff}m` : diff < 1440 ? `${Math.floor(diff / 60)}t` : `${Math.floor(diff / 1440)}d`;
-  return <span style={{ color: '#555', fontSize: 11, marginTop: 4, display: 'block' }}>{label} siden</span>;
-}
-
+// ─── Root ────────────────────────────────────────────────────────────────────
 export default function App() {
   return (
     <AuthProvider>
-      <NewsApp />
+      <ThemeProvider>
+        <StatsProvider>
+          <NewsApp />
+        </StatsProvider>
+      </ThemeProvider>
     </AuthProvider>
   );
 }
